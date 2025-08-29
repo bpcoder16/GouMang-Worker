@@ -1,0 +1,36 @@
+env:
+  appName: "GouMang-Worker"
+  # debug 调试 / test 测试 / release 线上发布
+  runMode: "debug"
+  timeLocation: "Asia/Shanghai"
+  configDirName: ""
+
+filterKeys:
+  - "password"
+
+log:
+  logDir: ""
+  useRotateLog: true
+  stdRedirectFileSupport: false
+
+default:
+  MySQLSupport: false
+  SQLiteSupport: false
+  ClickhouseSupport: false
+  RedisSupport: false
+  MongoDBSupport: false
+  LRUCacheSupport: false
+  AliyunOSSSupport: false
+  LocalLockPoolSupport: false
+
+asyncService:
+  Support: false
+  QueueSize: 10000
+  ConsumerSize: 1000
+  TaskMaxRetryCnt: 3
+
+migrateService:
+  Support: false
+  DefaultVersion: 10000
+  FileVersionSaveDir: "./data"
+  MigrateSQLFileDir: "./migrate/mysql"

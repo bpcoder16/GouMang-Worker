@@ -1,0 +1,27 @@
+syntax = "proto3";
+
+package goumang;
+
+option go_package = "goumang-worker/service/pb";
+
+service Task {
+  rpc Run(TaskRequest) returns (stream TaskResponse);
+}
+
+message TaskRequest {
+  Method method = 1;
+  string method_params = 2;
+  int32 timeout = 3;
+  uint64 run_task_id = 4;
+}
+
+message TaskResponse {
+  oneof content {
+    string output = 1;
+    string error = 2;
+  }
+}
+
+enum Method {
+  SHELL = 0;
+}
