@@ -231,7 +231,7 @@ const file_proto_goumang_proto_rawDesc = "" +
 	"\x06Method\x12\t\n" +
 	"\x05SHELL\x10\x002<\n" +
 	"\x04Task\x124\n" +
-	"\x03Run\x12\x14.goumang.TaskRequest\x1a\x15.goumang.TaskResponse0\x01B\x1bZ\x19goumang-worker/service/pbb\x06proto3"
+	"\x03Run\x12\x14.goumang.TaskRequest\x1a\x15.goumang.TaskResponse0\x01B\x1cZ\x1agoumang-worker/services/pbb\x06proto3"
 
 var (
 	file_proto_goumang_proto_rawDescOnce sync.Once

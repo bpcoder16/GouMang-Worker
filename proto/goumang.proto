@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package goumang;
 
-option go_package = "goumang-worker/service/pb";
+option go_package = "goumang-worker/services/pb";
 
 service Task {
   rpc Run(TaskRequest) returns (stream TaskResponse);

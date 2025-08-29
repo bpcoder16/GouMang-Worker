@@ -4,7 +4,7 @@ import (
 	"bufio"
 	"context"
 	"fmt"
-	"goumang-worker/service/pb"
+	"goumang-worker/services/pb"
 	"io"
 	"os/exec"
 	"syscall"

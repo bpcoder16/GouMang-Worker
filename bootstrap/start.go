@@ -2,7 +2,7 @@ package bootstrap
 
 import (
 	"context"
-	"goumang-worker/service/goumang"
+	"goumang-worker/services/goumang"
 	"path"
 
 	"github.com/bpcoder16/Chestnut/v2/appconfig"
