@@ -21,7 +21,9 @@ func Start(ctx context.Context, config *appconfig.AppConfig) error {
 	g.Go(func() error {
 		return grpcserver.NewManager(
 			path.Join(env.ConfigDirPath(), "grpc.yaml"),
-			goumang.NewServer(),
+			goumang.NewServer(
+				goumang.NewShellService(),
+			),
 		).Run(ctx)
 	})
 

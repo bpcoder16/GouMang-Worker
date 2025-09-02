@@ -3,7 +3,7 @@ module goumang-worker
 go 1.24.6
 
 require (
-	github.com/bpcoder16/Chestnut/v2 v2.1.50-0.20250829055723-f268cc09a359
+	github.com/bpcoder16/Chestnut/v2 v2.1.50-0.20250902093531-91e6c7dcf743
 	google.golang.org/grpc v1.75.0
 	google.golang.org/protobuf v1.36.8
 )

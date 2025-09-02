@@ -35,3 +35,4 @@ conf/
 log/
 
 CLAUDE.md
+.claude/

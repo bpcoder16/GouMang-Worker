@@ -1,0 +1,179 @@
+package goumang
+
+import (
+	"bufio"
+	"context"
+	"fmt"
+	"goumang-worker/services/pb"
+	"io"
+	"os/exec"
+	"strings"
+	"syscall"
+
+	"github.com/bpcoder16/Chestnut/v2/core/gtask"
+	"github.com/bpcoder16/Chestnut/v2/logit"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+)
+
+type shellService struct{}
+
+func NewShellService() MethodService {
+	return &shellService{}
+}
+
+func (s *shellService) Method() pb.Method {
+	return pb.Method_SHELL
+}
+
+func (s *shellService) Run(ctx context.Context, command string, stream pb.Task_RunServer) error {
+	if len(command) == 0 {
+		return status.Error(codes.InvalidArgument, "empty command")
+	}
+
+	cmd := exec.CommandContext(ctx, "/bin/bash", "-c", command)
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		Setpgid: true, // 独立进程组，便于杀掉整个子进程组
+	}
+
+	// 获取 stdout 和 stderr
+	stdoutPipe, err := cmd.StdoutPipe()
+	if err != nil {
+		return status.Error(codes.Internal, fmt.Sprintf("failed to get stdout pipe: %v", err))
+	}
+	defer func() {
+		if errS := stdoutPipe.Close(); errS != nil && !strings.Contains(errS.Error(), "already closed") {
+			logit.Context(ctx).WarnW("stdoutPipe.Close().Err", errS)
+		}
+	}()
+
+	stderrPipe, err := cmd.StderrPipe()
+	if err != nil {
+		return status.Error(codes.Internal, fmt.Sprintf("failed to get stderr pipe: %v", err))
+	}
+	defer func() {
+		if errS := stderrPipe.Close(); errS != nil && !strings.Contains(errS.Error(), "already closed") {
+			logit.Context(ctx).WarnW("stderrPipe.Close().Err", errS)
+		}
+	}()
+
+	// 启动命令
+	if err = cmd.Start(); err != nil {
+		return status.Error(codes.Internal, fmt.Sprintf("start command failed: %v", err))
+	}
+
+	// 定义缓冲 channel
+	stdoutCh := make(chan string, bufSize)
+	stderrCh := make(chan string, bufSize)
+
+	g, gCtx := gtask.WithContext(ctx)
+
+	// 读取 stdout
+	g.Go(func() error {
+		scanner := bufio.NewScanner(stdoutPipe)
+		for scanner.Scan() {
+			select {
+			case stdoutCh <- scanner.Text():
+			case <-gCtx.Done():
+				return nil
+			}
+		}
+		if errS := scanner.Err(); errS != nil && errS != io.EOF {
+			logit.Context(ctx).WarnW("stdout.scanner.Err", errS)
+			stdoutCh <- fmt.Sprintf("stdout read error: %v", errS)
+		}
+		close(stdoutCh)
+		return nil
+	})
+
+	// 读取 stderr
+	g.Go(func() error {
+		scanner := bufio.NewScanner(stderrPipe)
+		for scanner.Scan() {
+			select {
+			case stderrCh <- scanner.Text():
+			case <-gCtx.Done():
+				return nil
+			}
+		}
+		if errS := scanner.Err(); errS != nil && errS != io.EOF {
+			logit.Context(ctx).WarnW("stderr.scanner.Err", errS)
+			stderrCh <- fmt.Sprintf("stderr read error: %v", errS)
+		}
+		close(stderrCh)
+		return nil
+	})
+
+	// 发送流
+	sendErrCh := make(chan error, 1)
+	g.Go(func() error {
+		for stdoutCh != nil || stderrCh != nil {
+			select {
+			case line, ok := <-stdoutCh:
+				if !ok {
+					stdoutCh = nil
+					continue
+				}
+				if errS := stream.Send(&pb.TaskResponse{Content: &pb.TaskResponse_Output{Output: line}}); errS != nil {
+					logit.Context(gCtx).WarnW("stdout.stream.Send.Err", errS)
+					sendErrCh <- errS
+					return nil
+				}
+			case line, ok := <-stderrCh:
+				if !ok {
+					stderrCh = nil
+					continue
+				}
+				if errS := stream.Send(&pb.TaskResponse{Content: &pb.TaskResponse_Error{Error: line}}); errS != nil {
+					logit.Context(gCtx).WarnW("stderr.stream.Send.Err", errS)
+					sendErrCh <- errS
+					return nil
+				}
+			}
+		}
+		sendErrCh <- nil
+		return nil
+	})
+
+	g.Go(func() error {
+		select {
+		case <-gCtx.Done():
+			if errK := s.killProcessGroup(ctx, cmd); errK != nil {
+				logit.Context(ctx).WarnW("killProcessGroup.Err", errK)
+			}
+			return status.Error(codes.Internal, fmt.Sprintf("command canceled or timeout: %v", gCtx.Err()))
+		case errS := <-sendErrCh:
+			if errS != nil {
+				if errK := s.killProcessGroup(ctx, cmd); errK != nil {
+					logit.Context(ctx).WarnW("killProcessGroup.Err", errK)
+				}
+				return status.Error(codes.Internal, fmt.Sprintf("failed to send output: %v", errS))
+			}
+		}
+		return nil
+	})
+
+	g.Go(func() error {
+		// 等待命令退出
+		if errC := cmd.Wait(); errC != nil {
+			logit.Context(ctx).WarnW("cmd.Wait.Err", errC)
+			return status.Error(codes.Internal, fmt.Sprintf("command exited with error: %v", errC))
+		}
+		return nil
+	})
+
+	return g.Wait()
+}
+
+func (s *shellService) killProcessGroup(ctx context.Context, cmd *exec.Cmd) error {
+	if cmd.Process == nil || cmd.Process.Pid <= 0 {
+		return nil
+	}
+
+	if err := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL); err != nil {
+		return fmt.Errorf("failed to kill process group %d: %w", cmd.Process.Pid, err)
+	}
+
+	logit.Context(ctx).InfoW("process group killed pid", cmd.Process.Pid)
+	return nil
+}
