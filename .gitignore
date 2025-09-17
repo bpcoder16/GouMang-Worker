@@ -33,6 +33,3 @@ go.work.sum
 
 conf/
 log/
-
-CLAUDE.md
-.claude/
