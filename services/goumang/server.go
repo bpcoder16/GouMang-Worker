@@ -2,8 +2,13 @@ package goumang
 
 import (
 	"context"
+	"fmt"
+	"goumang-worker/services/executor"
 	"goumang-worker/services/pb"
 	"time"
+
+	// 导入执行器包以触发自动注册
+	_ "goumang-worker/services/executor/shell"
 
 	"github.com/bpcoder16/Chestnut/v2/logit"
 	"google.golang.org/grpc"
@@ -12,28 +17,17 @@ import (
 )
 
 const (
-	bufSize               = 1000
 	defaultTimeoutMinutes = 10
 	maxTimeoutMinutes     = 60
 )
 
-type MethodService interface {
-	Method() pb.Method
-	Run(ctx context.Context, params string, stream pb.Task_RunServer) error
-}
 type Server struct {
 	pb.UnimplementedTaskServer
-	methodServiceMap map[pb.Method]MethodService
 }
 
-func NewServer(methodServiceList ...MethodService) *Server {
-	server := &Server{
-		methodServiceMap: make(map[pb.Method]MethodService, 20),
-	}
-	for _, service := range methodServiceList {
-		server.methodServiceMap[service.Method()] = service
-	}
-	return server
+// NewServer 创建服务器
+func NewServer() *Server {
+	return &Server{}
 }
 
 func (s *Server) RegisterService(serviceRegistrar grpc.ServiceRegistrar) {
@@ -49,11 +43,15 @@ func (s *Server) Run(req *pb.TaskRequest, stream pb.Task_RunServer) error {
 	defer cancel()
 
 	var err error
-	if methodService, isExist := s.methodServiceMap[req.Method]; isExist {
-		err = methodService.Run(ctx, req.MethodParams, stream)
+
+	// 使用工厂创建执行器
+	exec, createErr := executor.CreateExecutor(req.Method)
+	if createErr != nil {
+		err = status.Error(codes.InvalidArgument, fmt.Sprintf("unsupported method %s: %v", req.Method.String(), createErr))
 	} else {
-		err = status.Error(codes.InvalidArgument, "unsupported method: "+req.Method.String())
+		err = exec.Execute(ctx, req.MethodParams, stream)
 	}
+
 	logit.Context(ctx).InfoW("task", "completed", "method", req.Method.String(), "taskId", req.RunTaskId, "error", err)
 	return err
 }

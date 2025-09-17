@@ -1,9 +1,10 @@
-package goumang
+package shell
 
 import (
 	"bufio"
 	"context"
 	"fmt"
+	"goumang-worker/services/executor"
 	"goumang-worker/services/pb"
 	"io"
 	"os/exec"
@@ -16,20 +17,51 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-type shellService struct{}
-
-func NewShellService() MethodService {
-	return &shellService{}
+// init 自动注册 Shell 执行器到默认工厂
+func init() {
+	executor.RegisterExecutor(pb.Method_SHELL, NewExecutor)
 }
 
-func (s *shellService) Method() pb.Method {
-	return pb.Method_SHELL
+const (
+	bufSize = 1000
+)
+
+// Executor shell 命令执行器
+type Executor struct {
+	//validator security.CommandValidator
+	//once      sync.Once
 }
 
-func (s *shellService) Run(ctx context.Context, command string, stream pb.Task_RunServer) error {
+// NewExecutor 创建新的 shell 执行器
+func NewExecutor() executor.Executor {
+	return &Executor{}
+}
+
+// initValidator 初始化验证器
+func (e *Executor) initValidator() {
+	//e.once.Do(func() {
+	//	e.validator = security.NewCommandValidator()
+	//})
+}
+
+// Execute 执行 shell 命令
+func (e *Executor) Execute(ctx context.Context, command string, stream pb.Task_RunServer) error {
+	command = strings.TrimSpace(command)
 	if len(command) == 0 {
 		return status.Error(codes.InvalidArgument, "empty command")
 	}
+
+	// 确保验证器已初始化
+	e.initValidator()
+
+	//// 验证命令安全性
+	//if err := e.validator.ValidateCommand(ctx, command); err != nil {
+	//	security.LogSecurityEvent(ctx, "COMMAND_BLOCKED", command, err.Error())
+	//	return status.Error(codes.PermissionDenied, fmt.Sprintf("command validation failed: %v", err))
+	//}
+	//
+	//// 记录允许的命令执行
+	//security.LogSecurityEvent(ctx, "COMMAND_ALLOWED", command, "passed security validation")
 
 	cmd := exec.CommandContext(ctx, "/bin/bash", "-c", command)
 	cmd.SysProcAttr = &syscall.SysProcAttr{
@@ -138,13 +170,13 @@ func (s *shellService) Run(ctx context.Context, command string, stream pb.Task_R
 	g.Go(func() error {
 		select {
 		case <-gCtx.Done():
-			if errK := s.killProcessGroup(ctx, cmd); errK != nil {
+			if errK := e.killProcessGroup(ctx, cmd); errK != nil {
 				logit.Context(ctx).WarnW("killProcessGroup.Err", errK)
 			}
 			return status.Error(codes.Internal, fmt.Sprintf("command canceled or timeout: %v", gCtx.Err()))
 		case errS := <-sendErrCh:
 			if errS != nil {
-				if errK := s.killProcessGroup(ctx, cmd); errK != nil {
+				if errK := e.killProcessGroup(ctx, cmd); errK != nil {
 					logit.Context(ctx).WarnW("killProcessGroup.Err", errK)
 				}
 				return status.Error(codes.Internal, fmt.Sprintf("failed to send output: %v", errS))
@@ -165,7 +197,8 @@ func (s *shellService) Run(ctx context.Context, command string, stream pb.Task_R
 	return g.Wait()
 }
 
-func (s *shellService) killProcessGroup(ctx context.Context, cmd *exec.Cmd) error {
+// killProcessGroup 杀死进程组
+func (e *Executor) killProcessGroup(ctx context.Context, cmd *exec.Cmd) error {
 	if cmd.Process == nil || cmd.Process.Pid <= 0 {
 		return nil
 	}
