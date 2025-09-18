@@ -37,31 +37,12 @@ func NewExecutor() executor.Executor {
 	return &Executor{}
 }
 
-// initValidator 初始化验证器
-func (e *Executor) initValidator() {
-	//e.once.Do(func() {
-	//	e.validator = security.NewCommandValidator()
-	//})
-}
-
 // Execute 执行 shell 命令
 func (e *Executor) Execute(ctx context.Context, command string, stream pb.Task_RunServer) error {
 	command = strings.TrimSpace(command)
 	if len(command) == 0 {
 		return status.Error(codes.InvalidArgument, "empty command")
 	}
-
-	// 确保验证器已初始化
-	e.initValidator()
-
-	//// 验证命令安全性
-	//if err := e.validator.ValidateCommand(ctx, command); err != nil {
-	//	security.LogSecurityEvent(ctx, "COMMAND_BLOCKED", command, err.Error())
-	//	return status.Error(codes.PermissionDenied, fmt.Sprintf("command validation failed: %v", err))
-	//}
-	//
-	//// 记录允许的命令执行
-	//security.LogSecurityEvent(ctx, "COMMAND_ALLOWED", command, "passed security validation")
 
 	cmd := exec.CommandContext(ctx, "/bin/bash", "-c", command)
 	cmd.SysProcAttr = &syscall.SysProcAttr{
