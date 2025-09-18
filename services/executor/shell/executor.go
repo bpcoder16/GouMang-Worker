@@ -6,9 +6,11 @@ import (
 	"fmt"
 	"goumang-worker/services/executor"
 	"goumang-worker/services/pb"
+	"goumang-worker/services/security"
 	"io"
 	"os/exec"
 	"strings"
+	"sync"
 	"syscall"
 
 	"github.com/bpcoder16/Chestnut/v2/core/gtask"
@@ -28,8 +30,8 @@ const (
 
 // Executor shell 命令执行器
 type Executor struct {
-	//validator security.CommandValidator
-	//once      sync.Once
+	validator security.CommandValidator
+	once      sync.Once
 }
 
 // NewExecutor 创建新的 shell 执行器
@@ -42,6 +44,30 @@ func (e *Executor) Execute(ctx context.Context, command string, stream pb.Task_R
 	command = strings.TrimSpace(command)
 	if len(command) == 0 {
 		return status.Error(codes.InvalidArgument, "empty command")
+	}
+
+	// 初始化验证器（只初始化一次）
+	e.once.Do(func() {
+		validator, err := security.NewValidator("/conf/security.yaml")
+		if err != nil {
+			logit.Context(ctx).ErrorW("failed to create security validator", "error", err)
+			// 如果验证器创建失败，使用禁用的验证器
+			e.validator = &disabledValidator{}
+		} else {
+			e.validator = validator
+		}
+	})
+
+	// 验证命令
+	if e.validator != nil && e.validator.IsEnabled() {
+		result := e.validator.ValidateCommand(ctx, command)
+		if !result.Valid {
+			return status.Error(codes.PermissionDenied, fmt.Sprintf("command not allowed: %s", result.Reason))
+		}
+		// 使用标准化的命令
+		if result.NormalizedCommand != "" {
+			command = result.NormalizedCommand
+		}
 	}
 
 	cmd := exec.CommandContext(ctx, "/bin/bash", "-c", command)
@@ -189,5 +215,23 @@ func (e *Executor) killProcessGroup(ctx context.Context, cmd *exec.Cmd) error {
 	}
 
 	logit.Context(ctx).InfoW("process group killed pid", cmd.Process.Pid)
+	return nil
+}
+
+// disabledValidator 禁用的验证器实现
+type disabledValidator struct{}
+
+func (d *disabledValidator) ValidateCommand(_ context.Context, command string) *security.ValidationResult {
+	return &security.ValidationResult{
+		Valid:             true,
+		NormalizedCommand: command,
+	}
+}
+
+func (d *disabledValidator) IsEnabled() bool {
+	return false
+}
+
+func (d *disabledValidator) Reload() error {
 	return nil
 }

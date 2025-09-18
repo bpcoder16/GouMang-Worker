@@ -1,0 +1,74 @@
+# 默认安全配置文件
+security:
+  # 启用命令验证（开发环境可设为 false）
+  enableValidation: true
+
+  # 允许的执行路径白名单
+  allowedPaths:
+    # 示例：应用脚本目录
+    - path: "/opt/app/scripts"
+      description: "应用脚本目录"
+      recursive: true  # 允许子目录
+      maxDepth: 10     # 最大子目录深度，0表示只当前目录，-1表示无限制
+
+    # 示例：用户脚本目录
+    - path: "/home/scripts"
+      description: "用户脚本目录"
+      recursive: true
+      maxDepth: 3
+
+    # 示例：系统工具目录
+    - path: "/usr/local/bin"
+      description: "系统工具目录"
+      recursive: false  # 只允许当前目录
+      maxDepth: 0
+
+  # 允许的命令类型和解释器
+  allowedInterpreters:
+    # Python 解释器
+    - name: "python"
+      executables: ["python", "python3", "python3.8", "python3.9", "python3.10", "python3.11"]
+      fileExtensions: [".py", ".pyw"]
+      description: "Python 脚本执行器"
+
+    # PHP 解释器
+    - name: "php"
+      executables: ["php", "php8", "php7"]
+      fileExtensions: [".php"]
+      description: "PHP 脚本执行器"
+
+    # Shell 解释器
+    - name: "shell"
+      executables: ["bash", "sh", "zsh"]
+      fileExtensions: [".sh", ".bash", ".zsh"]
+      description: "Shell 脚本执行器"
+
+    # Node.js 解释器
+    - name: "node"
+      executables: ["node"]
+      fileExtensions: [".js"]
+      description: "Node.js 脚本执行器"
+
+    # 二进制可执行文件
+    - name: "binary"
+      executables: []  # 空表示直接执行
+      fileExtensions: [""]  # 无扩展名
+      description: "二进制可执行文件"
+
+  # 命令解析配置
+  commandParsing:
+    # 是否允许管道操作
+    allowPipes: false
+    # 是否允许重定向
+    allowRedirection: false
+    # 是否允许后台执行
+    allowBackground: false
+    # 是否允许命令链接 (&&, ||, ;)
+    allowChaining: false
+
+  # 日志配置
+  logging:
+    # 记录被拒绝的命令
+    logDeniedCommands: true
+    # 记录允许的命令
+    logAllowedCommands: true
