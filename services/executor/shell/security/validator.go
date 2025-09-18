@@ -9,6 +9,8 @@ import (
 	"strings"
 	"sync"
 
+	"goumang-worker/services/security"
+
 	"github.com/bpcoder16/Chestnut/v2/appconfig"
 	"github.com/bpcoder16/Chestnut/v2/logit"
 )
@@ -20,7 +22,7 @@ type validator struct {
 }
 
 // NewValidator 创建新的命令验证器
-func NewValidator(configPath string) (CommandValidator, error) {
+func NewValidator(configPath string) (security.CommandValidator, error) {
 	v := &validator{}
 	if err := v.loadConfig(configPath); err != nil {
 		return nil, fmt.Errorf("failed to load security config: %w", err)
@@ -58,9 +60,9 @@ func (v *validator) loadConfig(configPath string) error {
 }
 
 // ValidateCommand 验证命令是否允许执行
-func (v *validator) ValidateCommand(ctx context.Context, command string) *ValidationResult {
+func (v *validator) ValidateCommand(ctx context.Context, command string) *security.ValidationResult {
 	if !v.IsEnabled() {
-		return &ValidationResult{
+		return &security.ValidationResult{
 			Valid:             true,
 			NormalizedCommand: command,
 		}
@@ -72,7 +74,7 @@ func (v *validator) ValidateCommand(ctx context.Context, command string) *Valida
 	// 清理命令
 	command = strings.TrimSpace(command)
 	if command == "" {
-		return &ValidationResult{
+		return &security.ValidationResult{
 			Valid:  false,
 			Reason: "empty command",
 		}
@@ -86,7 +88,7 @@ func (v *validator) ValidateCommand(ctx context.Context, command string) *Valida
 	// 解析命令
 	parsedCmd, err := v.parseCommand(command)
 	if err != nil {
-		return &ValidationResult{
+		return &security.ValidationResult{
 			Valid:  false,
 			Reason: fmt.Sprintf("failed to parse command: %v", err),
 		}
@@ -102,7 +104,7 @@ func (v *validator) ValidateCommand(ctx context.Context, command string) *Valida
 		logit.Context(ctx).InfoW("command allowed", "command", command)
 	}
 
-	return &ValidationResult{
+	return &security.ValidationResult{
 		Valid:             true,
 		NormalizedCommand: command,
 	}
@@ -142,13 +144,13 @@ func (v *validator) parseCommand(command string) (*ParsedCommand, error) {
 }
 
 // validateParsedCommand 验证解析后的命令
-func (v *validator) validateParsedCommand(ctx context.Context, cmd *ParsedCommand) *ValidationResult {
+func (v *validator) validateParsedCommand(ctx context.Context, cmd *ParsedCommand) *security.ValidationResult {
 	// 验证解释器
 	interpreter := v.findMatchingInterpreter(cmd.Interpreter)
 	if interpreter == nil {
 		reason := fmt.Sprintf("interpreter '%s' not allowed", cmd.Interpreter)
 		v.logDeniedCommand(ctx, reason, cmd)
-		return &ValidationResult{
+		return &security.ValidationResult{
 			Valid:  false,
 			Reason: reason,
 		}
@@ -163,7 +165,7 @@ func (v *validator) validateParsedCommand(ctx context.Context, cmd *ParsedComman
 		// 其他解释器需要指定文件
 		reason := "missing file path"
 		v.logDeniedCommand(ctx, reason, cmd)
-		return &ValidationResult{
+		return &security.ValidationResult{
 			Valid:  false,
 			Reason: reason,
 		}
@@ -191,31 +193,31 @@ func (v *validator) findMatchingInterpreter(executable string) *AllowedInterpret
 }
 
 // validateBinaryExecutable 验证二进制可执行文件
-func (v *validator) validateBinaryExecutable(ctx context.Context, executable string) *ValidationResult {
+func (v *validator) validateBinaryExecutable(ctx context.Context, executable string) *security.ValidationResult {
 	// 验证可执行文件路径是否在允许的目录中
 	for _, allowedPath := range v.config.Security.AllowedPaths {
 		fullPath := filepath.Join(allowedPath.Path, executable)
 		if v.isPathAllowed(fullPath, &allowedPath) {
-			return &ValidationResult{Valid: true}
+			return &security.ValidationResult{Valid: true}
 		}
 	}
 
 	reason := fmt.Sprintf("binary executable '%s' not in allowed paths", executable)
 	v.logDeniedCommand(ctx, reason, &ParsedCommand{Interpreter: executable})
-	return &ValidationResult{
+	return &security.ValidationResult{
 		Valid:  false,
 		Reason: reason,
 	}
 }
 
 // validateFilePath 验证文件路径
-func (v *validator) validateFilePath(ctx context.Context, filePath string, interpreter *AllowedInterpreter) *ValidationResult {
+func (v *validator) validateFilePath(ctx context.Context, filePath string, interpreter *AllowedInterpreter) *security.ValidationResult {
 	// 转换为绝对路径
 	absPath, err := filepath.Abs(filePath)
 	if err != nil {
 		reason := fmt.Sprintf("invalid file path '%s': %v", filePath, err)
 		v.logDeniedCommand(ctx, reason, &ParsedCommand{FilePath: filePath})
-		return &ValidationResult{
+		return &security.ValidationResult{
 			Valid:  false,
 			Reason: reason,
 		}
@@ -225,7 +227,7 @@ func (v *validator) validateFilePath(ctx context.Context, filePath string, inter
 	if _, err := os.Stat(absPath); os.IsNotExist(err) {
 		reason := fmt.Sprintf("file does not exist: %s", absPath)
 		v.logDeniedCommand(ctx, reason, &ParsedCommand{FilePath: filePath})
-		return &ValidationResult{
+		return &security.ValidationResult{
 			Valid:  false,
 			Reason: reason,
 		}
@@ -235,7 +237,7 @@ func (v *validator) validateFilePath(ctx context.Context, filePath string, inter
 	if !v.isValidFileExtension(absPath, interpreter) {
 		reason := fmt.Sprintf("file extension not allowed for interpreter '%s': %s", interpreter.Name, absPath)
 		v.logDeniedCommand(ctx, reason, &ParsedCommand{FilePath: filePath})
-		return &ValidationResult{
+		return &security.ValidationResult{
 			Valid:  false,
 			Reason: reason,
 		}
@@ -245,13 +247,13 @@ func (v *validator) validateFilePath(ctx context.Context, filePath string, inter
 	if !v.isFileInAllowedPaths(absPath) {
 		reason := fmt.Sprintf("file path not in allowed directories: %s", absPath)
 		v.logDeniedCommand(ctx, reason, &ParsedCommand{FilePath: filePath})
-		return &ValidationResult{
+		return &security.ValidationResult{
 			Valid:  false,
 			Reason: reason,
 		}
 	}
 
-	return &ValidationResult{Valid: true}
+	return &security.ValidationResult{Valid: true}
 }
 
 // isValidFileExtension 检查文件扩展名是否有效
@@ -321,12 +323,12 @@ func (v *validator) isPathAllowed(filePath string, allowedPath *AllowedPath) boo
 }
 
 // checkDangerousPatterns 检查危险模式
-func (v *validator) checkDangerousPatterns(ctx context.Context, command string) *ValidationResult {
+func (v *validator) checkDangerousPatterns(ctx context.Context, command string) *security.ValidationResult {
 	// 检查管道
 	if !v.config.Security.CommandParsing.AllowPipes && strings.Contains(command, "|") {
 		reason := "pipes not allowed"
 		v.logDeniedCommand(ctx, reason, &ParsedCommand{})
-		return &ValidationResult{Valid: false, Reason: reason}
+		return &security.ValidationResult{Valid: false, Reason: reason}
 	}
 
 	// 检查重定向
@@ -336,7 +338,7 @@ func (v *validator) checkDangerousPatterns(ctx context.Context, command string) 
 			if strings.Contains(command, pattern) {
 				reason := "redirection not allowed"
 				v.logDeniedCommand(ctx, reason, &ParsedCommand{})
-				return &ValidationResult{Valid: false, Reason: reason}
+				return &security.ValidationResult{Valid: false, Reason: reason}
 			}
 		}
 	}
@@ -345,7 +347,7 @@ func (v *validator) checkDangerousPatterns(ctx context.Context, command string) 
 	if !v.config.Security.CommandParsing.AllowBackground && strings.HasSuffix(strings.TrimSpace(command), "&") {
 		reason := "background execution not allowed"
 		v.logDeniedCommand(ctx, reason, &ParsedCommand{})
-		return &ValidationResult{Valid: false, Reason: reason}
+		return &security.ValidationResult{Valid: false, Reason: reason}
 	}
 
 	// 检查命令链接
@@ -355,7 +357,7 @@ func (v *validator) checkDangerousPatterns(ctx context.Context, command string) 
 			if strings.Contains(command, pattern) {
 				reason := "command chaining not allowed"
 				v.logDeniedCommand(ctx, reason, &ParsedCommand{})
-				return &ValidationResult{Valid: false, Reason: reason}
+				return &security.ValidationResult{Valid: false, Reason: reason}
 			}
 		}
 	}
@@ -375,11 +377,11 @@ func (v *validator) checkDangerousPatterns(ctx context.Context, command string) 
 		if matched {
 			reason := fmt.Sprintf("dangerous pattern detected: %s", pattern)
 			v.logDeniedCommand(ctx, reason, &ParsedCommand{})
-			return &ValidationResult{Valid: false, Reason: reason}
+			return &security.ValidationResult{Valid: false, Reason: reason}
 		}
 	}
 
-	return &ValidationResult{Valid: true}
+	return &security.ValidationResult{Valid: true}
 }
 
 // logDeniedCommand 记录被拒绝的命令
