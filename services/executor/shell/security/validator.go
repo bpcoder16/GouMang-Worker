@@ -345,17 +345,14 @@ func (v *validator) checkDangerousPatterns(ctx context.Context, command string) 
 		}
 	}
 
-	//// 检查命令链接
-	//if !v.config.Security.CommandParsing.AllowChaining {
-	//	chainPatterns := []string{"&&", "||", ";"}
-	//	for _, pattern := range chainPatterns {
-	//		if strings.Contains(command, pattern) {
-	//			reason := "command chaining not allowed"
-	//			v.logDeniedCommand(ctx, reason, &ParsedCommand{})
-	//			return &ValidationResult{Valid: false, Reason: reason}
-	//		}
-	//	}
-	//}
+	// 检查命令链接 - 使用语法树精确检测
+	if !v.config.Security.CommandParsing.AllowChaining {
+		if v.hasChaining(command) {
+			reason := "command chaining not allowed"
+			v.logDeniedCommand(ctx, reason, &ParsedCommand{})
+			return &ValidationResult{Valid: false, Reason: reason}
+		}
+	}
 	//
 	//// 检查其他危险模式
 	//dangerousPatterns := []string{
@@ -414,6 +411,40 @@ func (v *validator) hasPipes(command string) bool {
 	})
 
 	return hasPipe
+}
+
+// hasChaining 使用语法树检测命令中是否包含命令链接
+func (v *validator) hasChaining(command string) bool {
+	parser := syntax.NewParser()
+	prog, err := parser.Parse(strings.NewReader(command), "")
+	if err != nil {
+		// 解析失败时，为了安全起见返回 true（认为有命令链接）
+		return true
+	}
+
+	hasChain := false
+	syntax.Walk(prog, func(node syntax.Node) bool {
+		// 检查 BinaryCmd 节点（命令链接的主要表示方式）
+		if binary, ok := node.(*syntax.BinaryCmd); ok {
+			switch binary.Op {
+			case syntax.AndStmt, syntax.OrStmt: // && 和 ||
+				hasChain = true
+				return false
+			default:
+				// 其他类型的 BinaryCmd（如管道）不算命令链接
+			}
+		}
+		// 检查是否有多个语句（用 ; 分隔）
+		if file, ok := node.(*syntax.File); ok {
+			if len(file.Stmts) > 1 {
+				hasChain = true
+				return false
+			}
+		}
+		return true
+	})
+
+	return hasChain
 }
 
 // hasBackground 使用语法树检测命令中是否包含后台执行
