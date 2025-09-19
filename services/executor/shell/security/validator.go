@@ -317,6 +317,7 @@ func (v *validator) isPathAllowed(filePath string, allowedPath *AllowedPath) boo
 // checkDangerousPatterns 检查危险模式
 func (v *validator) checkDangerousPatterns(ctx context.Context, command string) *ValidationResult {
 	// 检查管道 - 使用语法树精确检测
+	// TODO 需要考虑管道后的 grep 处理，需要增加 --line-buffered
 	if !v.config.Security.CommandParsing.AllowPipes {
 		if v.hasPipes(command) {
 			reason := "pipes not allowed"
@@ -334,13 +335,16 @@ func (v *validator) checkDangerousPatterns(ctx context.Context, command string) 
 		}
 	}
 
-	//// 检查后台执行
-	//if !v.config.Security.CommandParsing.AllowBackground && strings.HasSuffix(strings.TrimSpace(command), "&") {
-	//	reason := "background execution not allowed"
-	//	v.logDeniedCommand(ctx, reason, &ParsedCommand{})
-	//	return &ValidationResult{Valid: false, Reason: reason}
-	//}
-	//
+	// 检查后台执行 - 使用语法树精确检测
+	// TODO 考虑是否要禁掉 nohup 命令
+	if !v.config.Security.CommandParsing.AllowBackground {
+		if v.hasBackground(command) {
+			reason := "background execution not allowed"
+			v.logDeniedCommand(ctx, reason, &ParsedCommand{})
+			return &ValidationResult{Valid: false, Reason: reason}
+		}
+	}
+
 	//// 检查命令链接
 	//if !v.config.Security.CommandParsing.AllowChaining {
 	//	chainPatterns := []string{"&&", "||", ";"}
@@ -410,6 +414,30 @@ func (v *validator) hasPipes(command string) bool {
 	})
 
 	return hasPipe
+}
+
+// hasBackground 使用语法树检测命令中是否包含后台执行
+func (v *validator) hasBackground(command string) bool {
+	parser := syntax.NewParser()
+	prog, err := parser.Parse(strings.NewReader(command), "")
+	if err != nil {
+		// 解析失败时，为了安全起见返回 true（认为有后台执行）
+		return true
+	}
+
+	hasBg := false
+	syntax.Walk(prog, func(node syntax.Node) bool {
+		// 检查语句节点的后台标志
+		if stmt, ok := node.(*syntax.Stmt); ok {
+			if stmt.Background {
+				hasBg = true
+				return false
+			}
+		}
+		return true
+	})
+
+	return hasBg
 }
 
 // hasRedirection 使用语法树检测命令中是否包含重定向
