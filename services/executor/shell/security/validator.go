@@ -316,10 +316,20 @@ func (v *validator) isPathAllowed(filePath string, allowedPath *AllowedPath) boo
 
 // checkDangerousPatterns 检查危险模式
 func (v *validator) checkDangerousPatterns(ctx context.Context, command string) *ValidationResult {
+	// 统一解析命令语法树，避免重复解析
+	parser := syntax.NewParser()
+	prog, err := parser.Parse(strings.NewReader(command), "")
+	if err != nil {
+		// 解析失败时，为了安全起见认为是危险命令
+		reason := fmt.Sprintf("command parsing failed: %v", err)
+		v.logDeniedCommand(ctx, reason, &ParsedCommand{})
+		return &ValidationResult{Valid: false, Reason: reason}
+	}
+
 	// 检查管道 - 使用语法树精确检测
 	// TODO 需要考虑管道后的 grep 处理，需要增加 --line-buffered
 	if !v.config.Security.CommandParsing.AllowPipes {
-		if v.hasPipes(command) {
+		if v.hasPipes(prog) {
 			reason := "pipes not allowed"
 			v.logDeniedCommand(ctx, reason, &ParsedCommand{})
 			return &ValidationResult{Valid: false, Reason: reason}
@@ -328,7 +338,7 @@ func (v *validator) checkDangerousPatterns(ctx context.Context, command string) 
 
 	// 检查重定向 - 使用语法树精确检测
 	if !v.config.Security.CommandParsing.AllowRedirection {
-		if v.hasRedirection(command) {
+		if v.hasRedirection(prog) {
 			reason := "redirection not allowed"
 			v.logDeniedCommand(ctx, reason, &ParsedCommand{})
 			return &ValidationResult{Valid: false, Reason: reason}
@@ -338,7 +348,7 @@ func (v *validator) checkDangerousPatterns(ctx context.Context, command string) 
 	// 检查后台执行 - 使用语法树精确检测
 	// TODO 考虑是否要禁掉 nohup 命令
 	if !v.config.Security.CommandParsing.AllowBackground {
-		if v.hasBackground(command) {
+		if v.hasBackground(prog) {
 			reason := "background execution not allowed"
 			v.logDeniedCommand(ctx, reason, &ParsedCommand{})
 			return &ValidationResult{Valid: false, Reason: reason}
@@ -347,31 +357,17 @@ func (v *validator) checkDangerousPatterns(ctx context.Context, command string) 
 
 	// 检查命令链接 - 使用语法树精确检测
 	if !v.config.Security.CommandParsing.AllowChaining {
-		if v.hasChaining(command) {
+		if v.hasChaining(prog) {
 			reason := "command chaining not allowed"
 			v.logDeniedCommand(ctx, reason, &ParsedCommand{})
 			return &ValidationResult{Valid: false, Reason: reason}
 		}
 	}
-	//
-	//// 检查其他危险模式
-	//dangerousPatterns := []string{
-	//	`\$\(`,     // 命令替换
-	//	"`",        // 反引号命令替换
-	//	"rm -rf",   // 危险删除
-	//	"sudo",     // sudo 命令
-	//	"su ",      // 切换用户
-	//	"chmod +x", // 修改执行权限
-	//}
-	//
-	//for _, pattern := range dangerousPatterns {
-	//	matched, _ := regexp.MatchString(pattern, command)
-	//	if matched {
-	//		reason := fmt.Sprintf("dangerous pattern detected: %s", pattern)
-	//		v.logDeniedCommand(ctx, reason, &ParsedCommand{})
-	//		return &ValidationResult{Valid: false, Reason: reason}
-	//	}
-	//}
+
+	// 检查其他危险模式 - 使用语法树精确检测
+	if result := v.checkOtherDangerousPatterns(ctx, prog); !result.Valid {
+		return result
+	}
 
 	return &ValidationResult{Valid: true}
 }
@@ -389,15 +385,8 @@ func (v *validator) logDeniedCommand(ctx context.Context, reason string, cmd *Pa
 	}
 }
 
-// hasPipes 使用语法树检测命令中是否包含管道
-func (v *validator) hasPipes(command string) bool {
-	parser := syntax.NewParser()
-	prog, err := parser.Parse(strings.NewReader(command), "")
-	if err != nil {
-		// 解析失败时，为了安全起见返回 true（认为有管道）
-		return true
-	}
-
+// hasPipes 从已解析的AST检测是否包含管道
+func (v *validator) hasPipes(prog *syntax.File) bool {
 	hasPipe := false
 	syntax.Walk(prog, func(node syntax.Node) bool {
 		// 检查 BinaryCmd 节点（管道的主要表示方式）
@@ -413,15 +402,8 @@ func (v *validator) hasPipes(command string) bool {
 	return hasPipe
 }
 
-// hasChaining 使用语法树检测命令中是否包含命令链接
-func (v *validator) hasChaining(command string) bool {
-	parser := syntax.NewParser()
-	prog, err := parser.Parse(strings.NewReader(command), "")
-	if err != nil {
-		// 解析失败时，为了安全起见返回 true（认为有命令链接）
-		return true
-	}
-
+// hasChaining 从已解析的AST检测是否包含命令链接
+func (v *validator) hasChaining(prog *syntax.File) bool {
 	hasChain := false
 	syntax.Walk(prog, func(node syntax.Node) bool {
 		// 检查 BinaryCmd 节点（命令链接的主要表示方式）
@@ -447,15 +429,8 @@ func (v *validator) hasChaining(command string) bool {
 	return hasChain
 }
 
-// hasBackground 使用语法树检测命令中是否包含后台执行
-func (v *validator) hasBackground(command string) bool {
-	parser := syntax.NewParser()
-	prog, err := parser.Parse(strings.NewReader(command), "")
-	if err != nil {
-		// 解析失败时，为了安全起见返回 true（认为有后台执行）
-		return true
-	}
-
+// hasBackground 从已解析的AST检测是否包含后台执行
+func (v *validator) hasBackground(prog *syntax.File) bool {
 	hasBg := false
 	syntax.Walk(prog, func(node syntax.Node) bool {
 		// 检查语句节点的后台标志
@@ -471,15 +446,8 @@ func (v *validator) hasBackground(command string) bool {
 	return hasBg
 }
 
-// hasRedirection 使用语法树检测命令中是否包含重定向
-func (v *validator) hasRedirection(command string) bool {
-	parser := syntax.NewParser()
-	prog, err := parser.Parse(strings.NewReader(command), "")
-	if err != nil {
-		// 解析失败时，为了安全起见返回 true（认为有重定向）
-		return true
-	}
-
+// hasRedirection 从已解析的AST检测是否包含重定向
+func (v *validator) hasRedirection(prog *syntax.File) bool {
 	hasRedir := false
 	syntax.Walk(prog, func(node syntax.Node) bool {
 		if _, ok := node.(*syntax.Redirect); ok {
@@ -490,4 +458,158 @@ func (v *validator) hasRedirection(command string) bool {
 	})
 
 	return hasRedir
+}
+
+// checkOtherDangerousPatterns 从已解析的AST检查其他危险模式
+func (v *validator) checkOtherDangerousPatterns(ctx context.Context, prog *syntax.File) *ValidationResult {
+	// 检查命令替换
+	if result := v.checkCommandSubstitution(ctx, prog); !result.Valid {
+		return result
+	}
+
+	// 检查危险命令名称和参数
+	if result := v.checkDangerousCommands(ctx, prog); !result.Valid {
+		return result
+	}
+
+	return &ValidationResult{Valid: true}
+}
+
+// checkCommandSubstitution 检查命令替换（$() 和反引号）
+func (v *validator) checkCommandSubstitution(ctx context.Context, prog *syntax.File) *ValidationResult {
+	hasCmdSubst := false
+	var cmdSubstType string
+
+	syntax.Walk(prog, func(node syntax.Node) bool {
+		// 检查命令替换节点 $()
+		if cmdSubst, ok := node.(*syntax.CmdSubst); ok {
+			hasCmdSubst = true
+			if cmdSubst.Backquotes {
+				cmdSubstType = "backticks"
+			} else {
+				cmdSubstType = "dollar-parentheses"
+			}
+			return false // 停止遍历
+		}
+		return true
+	})
+
+	if hasCmdSubst {
+		reason := fmt.Sprintf("command substitution not allowed: %s", cmdSubstType)
+		v.logDeniedCommand(ctx, reason, &ParsedCommand{})
+		return &ValidationResult{Valid: false, Reason: reason}
+	}
+
+	return &ValidationResult{Valid: true}
+}
+
+// checkDangerousCommands 检查危险命令名称和参数组合
+func (v *validator) checkDangerousCommands(ctx context.Context, prog *syntax.File) *ValidationResult {
+	// 定义危险命令列表
+	dangerousCommands := map[string][]string{
+		"sudo":   {},                   // 任何 sudo 都不允许
+		"su":     {},                   // 任何 su 都不允许
+		"rm":     {"-rf", "-r", "-f"},  // rm 配合这些参数不允许
+		"chmod":  {"+x", "777", "755"}, // chmod 配合这些参数需要检查
+		"chown":  {},                   // 任何 chown 都不允许
+		"mount":  {},                   // 任何 mount 都不允许
+		"umount": {},                   // 任何 umount 都不允许
+		"dd":     {},                   // 任何 dd 都不允许
+	}
+
+	var foundIssue *ValidationResult
+
+	syntax.Walk(prog, func(node syntax.Node) bool {
+		// 检查命令调用节点
+		if callExpr, ok := node.(*syntax.CallExpr); ok {
+			if len(callExpr.Args) == 0 {
+				return true
+			}
+
+			// 获取命令名称
+			cmdName := v.getCommandName(callExpr.Args[0])
+			if cmdName == "" {
+				return true
+			}
+
+			// 检查是否是危险命令
+			if dangerousArgs, isDangerous := dangerousCommands[cmdName]; isDangerous {
+				// 如果是绝对禁止的命令（空参数列表表示完全禁止）
+				if len(dangerousArgs) == 0 {
+					reason := fmt.Sprintf("dangerous command not allowed: %s", cmdName)
+					v.logDeniedCommand(ctx, reason, &ParsedCommand{Interpreter: cmdName})
+					foundIssue = &ValidationResult{Valid: false, Reason: reason}
+					return false
+				}
+
+				// 检查危险参数组合
+				if v.hasDangerousArgs(callExpr.Args[1:], dangerousArgs) {
+					reason := fmt.Sprintf("dangerous command with forbidden arguments: %s", cmdName)
+					v.logDeniedCommand(ctx, reason, &ParsedCommand{Interpreter: cmdName})
+					foundIssue = &ValidationResult{Valid: false, Reason: reason}
+					return false
+				}
+			}
+		}
+		return true
+	})
+
+	if foundIssue != nil {
+		return foundIssue
+	}
+
+	return &ValidationResult{Valid: true}
+}
+
+// getCommandName 从语法节点中提取命令名称
+func (v *validator) getCommandName(arg *syntax.Word) string {
+	if arg == nil || len(arg.Parts) == 0 {
+		return ""
+	}
+
+	// 处理第一个部分，通常是命令名
+	part := arg.Parts[0]
+	if lit, ok := part.(*syntax.Lit); ok {
+		return lit.Value
+	}
+
+	return ""
+}
+
+// hasDangerousArgs 检查是否包含危险参数
+func (v *validator) hasDangerousArgs(args []*syntax.Word, dangerousArgs []string) bool {
+	// 将所有参数转换为字符串
+	var argStrings []string
+	for _, arg := range args {
+		if argStr := v.wordToString(arg); argStr != "" {
+			argStrings = append(argStrings, argStr)
+		}
+	}
+
+	// 检查是否包含危险参数
+	for _, dangerousArg := range dangerousArgs {
+		for _, argStr := range argStrings {
+			if strings.Contains(argStr, dangerousArg) {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
+// wordToString 将 Word 节点转换为字符串
+func (v *validator) wordToString(word *syntax.Word) string {
+	if word == nil {
+		return ""
+	}
+
+	var result strings.Builder
+	for _, part := range word.Parts {
+		if lit, ok := part.(*syntax.Lit); ok {
+			result.WriteString(lit.Value)
+		}
+	}
+
+	return result.String()
 }
