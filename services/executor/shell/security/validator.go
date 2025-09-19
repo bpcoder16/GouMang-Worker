@@ -5,24 +5,22 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"sync"
 
-	"goumang-worker/services/security"
-
-	"github.com/bpcoder16/Chestnut/v2/appconfig"
+	"github.com/bpcoder16/Chestnut/v2/core/utils"
 	"github.com/bpcoder16/Chestnut/v2/logit"
+	"mvdan.cc/sh/v3/syntax"
 )
 
 // validator 命令验证器实现
 type validator struct {
-	config *SecurityConfig
+	config *Config
 	mu     sync.RWMutex
 }
 
 // NewValidator 创建新的命令验证器
-func NewValidator(configPath string) (security.CommandValidator, error) {
+func NewValidator(configPath string) (CommandValidator, error) {
 	v := &validator{}
 	if err := v.loadConfig(configPath); err != nil {
 		return nil, fmt.Errorf("failed to load security config: %w", err)
@@ -37,18 +35,12 @@ func (v *validator) IsEnabled() bool {
 	return v.config != nil && v.config.Security.EnableValidation
 }
 
-// Reload 重新加载配置
-func (v *validator) Reload() error {
-	// 使用默认配置路径重新加载
-	return v.loadConfig("/conf/security.yaml")
-}
-
 // loadConfig 加载配置文件
 func (v *validator) loadConfig(configPath string) error {
-	config := &SecurityConfig{}
+	config := &Config{}
 
-	// 使用 Chestnut 框架的配置加载方式
-	if err := appconfig.LoadYamlConfig(configPath, config); err != nil {
+	// 使用 Chestnut 框架的 utils.ParseFile 方式
+	if err := utils.ParseFile(configPath, config); err != nil {
 		return fmt.Errorf("failed to load config from %s: %w", configPath, err)
 	}
 
@@ -60,9 +52,9 @@ func (v *validator) loadConfig(configPath string) error {
 }
 
 // ValidateCommand 验证命令是否允许执行
-func (v *validator) ValidateCommand(ctx context.Context, command string) *security.ValidationResult {
+func (v *validator) ValidateCommand(ctx context.Context, command string) *ValidationResult {
 	if !v.IsEnabled() {
-		return &security.ValidationResult{
+		return &ValidationResult{
 			Valid:             true,
 			NormalizedCommand: command,
 		}
@@ -74,7 +66,7 @@ func (v *validator) ValidateCommand(ctx context.Context, command string) *securi
 	// 清理命令
 	command = strings.TrimSpace(command)
 	if command == "" {
-		return &security.ValidationResult{
+		return &ValidationResult{
 			Valid:  false,
 			Reason: "empty command",
 		}
@@ -85,26 +77,26 @@ func (v *validator) ValidateCommand(ctx context.Context, command string) *securi
 		return result
 	}
 
-	// 解析命令
-	parsedCmd, err := v.parseCommand(command)
-	if err != nil {
-		return &security.ValidationResult{
-			Valid:  false,
-			Reason: fmt.Sprintf("failed to parse command: %v", err),
-		}
-	}
+	//// 解析命令
+	//parsedCmd, err := v.parseCommand(command)
+	//if err != nil {
+	//	return &ValidationResult{
+	//		Valid:  false,
+	//		Reason: fmt.Sprintf("failed to parse command: %v", err),
+	//	}
+	//}
+	//
+	//// 验证命令
+	//if result := v.validateParsedCommand(ctx, parsedCmd); !result.Valid {
+	//	return result
+	//}
+	//
+	//// 记录允许的命令
+	//if v.config.Security.Logging.LogAllowedCommands {
+	//	logit.Context(ctx).InfoW("command allowed", "command", command)
+	//}
 
-	// 验证命令
-	if result := v.validateParsedCommand(ctx, parsedCmd); !result.Valid {
-		return result
-	}
-
-	// 记录允许的命令
-	if v.config.Security.Logging.LogAllowedCommands {
-		logit.Context(ctx).InfoW("command allowed", "command", command)
-	}
-
-	return &security.ValidationResult{
+	return &ValidationResult{
 		Valid:             true,
 		NormalizedCommand: command,
 	}
@@ -144,13 +136,13 @@ func (v *validator) parseCommand(command string) (*ParsedCommand, error) {
 }
 
 // validateParsedCommand 验证解析后的命令
-func (v *validator) validateParsedCommand(ctx context.Context, cmd *ParsedCommand) *security.ValidationResult {
+func (v *validator) validateParsedCommand(ctx context.Context, cmd *ParsedCommand) *ValidationResult {
 	// 验证解释器
 	interpreter := v.findMatchingInterpreter(cmd.Interpreter)
 	if interpreter == nil {
 		reason := fmt.Sprintf("interpreter '%s' not allowed", cmd.Interpreter)
 		v.logDeniedCommand(ctx, reason, cmd)
-		return &security.ValidationResult{
+		return &ValidationResult{
 			Valid:  false,
 			Reason: reason,
 		}
@@ -165,7 +157,7 @@ func (v *validator) validateParsedCommand(ctx context.Context, cmd *ParsedComman
 		// 其他解释器需要指定文件
 		reason := "missing file path"
 		v.logDeniedCommand(ctx, reason, cmd)
-		return &security.ValidationResult{
+		return &ValidationResult{
 			Valid:  false,
 			Reason: reason,
 		}
@@ -193,31 +185,31 @@ func (v *validator) findMatchingInterpreter(executable string) *AllowedInterpret
 }
 
 // validateBinaryExecutable 验证二进制可执行文件
-func (v *validator) validateBinaryExecutable(ctx context.Context, executable string) *security.ValidationResult {
+func (v *validator) validateBinaryExecutable(ctx context.Context, executable string) *ValidationResult {
 	// 验证可执行文件路径是否在允许的目录中
 	for _, allowedPath := range v.config.Security.AllowedPaths {
 		fullPath := filepath.Join(allowedPath.Path, executable)
 		if v.isPathAllowed(fullPath, &allowedPath) {
-			return &security.ValidationResult{Valid: true}
+			return &ValidationResult{Valid: true}
 		}
 	}
 
 	reason := fmt.Sprintf("binary executable '%s' not in allowed paths", executable)
 	v.logDeniedCommand(ctx, reason, &ParsedCommand{Interpreter: executable})
-	return &security.ValidationResult{
+	return &ValidationResult{
 		Valid:  false,
 		Reason: reason,
 	}
 }
 
 // validateFilePath 验证文件路径
-func (v *validator) validateFilePath(ctx context.Context, filePath string, interpreter *AllowedInterpreter) *security.ValidationResult {
+func (v *validator) validateFilePath(ctx context.Context, filePath string, interpreter *AllowedInterpreter) *ValidationResult {
 	// 转换为绝对路径
 	absPath, err := filepath.Abs(filePath)
 	if err != nil {
 		reason := fmt.Sprintf("invalid file path '%s': %v", filePath, err)
 		v.logDeniedCommand(ctx, reason, &ParsedCommand{FilePath: filePath})
-		return &security.ValidationResult{
+		return &ValidationResult{
 			Valid:  false,
 			Reason: reason,
 		}
@@ -227,7 +219,7 @@ func (v *validator) validateFilePath(ctx context.Context, filePath string, inter
 	if _, err := os.Stat(absPath); os.IsNotExist(err) {
 		reason := fmt.Sprintf("file does not exist: %s", absPath)
 		v.logDeniedCommand(ctx, reason, &ParsedCommand{FilePath: filePath})
-		return &security.ValidationResult{
+		return &ValidationResult{
 			Valid:  false,
 			Reason: reason,
 		}
@@ -237,7 +229,7 @@ func (v *validator) validateFilePath(ctx context.Context, filePath string, inter
 	if !v.isValidFileExtension(absPath, interpreter) {
 		reason := fmt.Sprintf("file extension not allowed for interpreter '%s': %s", interpreter.Name, absPath)
 		v.logDeniedCommand(ctx, reason, &ParsedCommand{FilePath: filePath})
-		return &security.ValidationResult{
+		return &ValidationResult{
 			Valid:  false,
 			Reason: reason,
 		}
@@ -247,13 +239,13 @@ func (v *validator) validateFilePath(ctx context.Context, filePath string, inter
 	if !v.isFileInAllowedPaths(absPath) {
 		reason := fmt.Sprintf("file path not in allowed directories: %s", absPath)
 		v.logDeniedCommand(ctx, reason, &ParsedCommand{FilePath: filePath})
-		return &security.ValidationResult{
+		return &ValidationResult{
 			Valid:  false,
 			Reason: reason,
 		}
 	}
 
-	return &security.ValidationResult{Valid: true}
+	return &ValidationResult{Valid: true}
 }
 
 // isValidFileExtension 检查文件扩展名是否有效
@@ -323,75 +315,120 @@ func (v *validator) isPathAllowed(filePath string, allowedPath *AllowedPath) boo
 }
 
 // checkDangerousPatterns 检查危险模式
-func (v *validator) checkDangerousPatterns(ctx context.Context, command string) *security.ValidationResult {
-	// 检查管道
-	if !v.config.Security.CommandParsing.AllowPipes && strings.Contains(command, "|") {
-		reason := "pipes not allowed"
-		v.logDeniedCommand(ctx, reason, &ParsedCommand{})
-		return &security.ValidationResult{Valid: false, Reason: reason}
-	}
-
-	// 检查重定向
-	if !v.config.Security.CommandParsing.AllowRedirection {
-		redirectPatterns := []string{">", ">>", "<", "2>", "2>>", "&>"}
-		for _, pattern := range redirectPatterns {
-			if strings.Contains(command, pattern) {
-				reason := "redirection not allowed"
-				v.logDeniedCommand(ctx, reason, &ParsedCommand{})
-				return &security.ValidationResult{Valid: false, Reason: reason}
-			}
-		}
-	}
-
-	// 检查后台执行
-	if !v.config.Security.CommandParsing.AllowBackground && strings.HasSuffix(strings.TrimSpace(command), "&") {
-		reason := "background execution not allowed"
-		v.logDeniedCommand(ctx, reason, &ParsedCommand{})
-		return &security.ValidationResult{Valid: false, Reason: reason}
-	}
-
-	// 检查命令链接
-	if !v.config.Security.CommandParsing.AllowChaining {
-		chainPatterns := []string{"&&", "||", ";"}
-		for _, pattern := range chainPatterns {
-			if strings.Contains(command, pattern) {
-				reason := "command chaining not allowed"
-				v.logDeniedCommand(ctx, reason, &ParsedCommand{})
-				return &security.ValidationResult{Valid: false, Reason: reason}
-			}
-		}
-	}
-
-	// 检查其他危险模式
-	dangerousPatterns := []string{
-		`\$\(`,     // 命令替换
-		"`",        // 反引号命令替换
-		"rm -rf",   // 危险删除
-		"sudo",     // sudo 命令
-		"su ",      // 切换用户
-		"chmod +x", // 修改执行权限
-	}
-
-	for _, pattern := range dangerousPatterns {
-		matched, _ := regexp.MatchString(pattern, command)
-		if matched {
-			reason := fmt.Sprintf("dangerous pattern detected: %s", pattern)
+func (v *validator) checkDangerousPatterns(ctx context.Context, command string) *ValidationResult {
+	// 检查管道 - 使用语法树精确检测
+	if !v.config.Security.CommandParsing.AllowPipes {
+		if v.hasPipes(command) {
+			reason := "pipes not allowed"
 			v.logDeniedCommand(ctx, reason, &ParsedCommand{})
-			return &security.ValidationResult{Valid: false, Reason: reason}
+			return &ValidationResult{Valid: false, Reason: reason}
 		}
 	}
 
-	return &security.ValidationResult{Valid: true}
+	// 检查重定向 - 使用语法树精确检测
+	if !v.config.Security.CommandParsing.AllowRedirection {
+		if v.hasRedirection(command) {
+			reason := "redirection not allowed"
+			v.logDeniedCommand(ctx, reason, &ParsedCommand{})
+			return &ValidationResult{Valid: false, Reason: reason}
+		}
+	}
+
+	//// 检查后台执行
+	//if !v.config.Security.CommandParsing.AllowBackground && strings.HasSuffix(strings.TrimSpace(command), "&") {
+	//	reason := "background execution not allowed"
+	//	v.logDeniedCommand(ctx, reason, &ParsedCommand{})
+	//	return &ValidationResult{Valid: false, Reason: reason}
+	//}
+	//
+	//// 检查命令链接
+	//if !v.config.Security.CommandParsing.AllowChaining {
+	//	chainPatterns := []string{"&&", "||", ";"}
+	//	for _, pattern := range chainPatterns {
+	//		if strings.Contains(command, pattern) {
+	//			reason := "command chaining not allowed"
+	//			v.logDeniedCommand(ctx, reason, &ParsedCommand{})
+	//			return &ValidationResult{Valid: false, Reason: reason}
+	//		}
+	//	}
+	//}
+	//
+	//// 检查其他危险模式
+	//dangerousPatterns := []string{
+	//	`\$\(`,     // 命令替换
+	//	"`",        // 反引号命令替换
+	//	"rm -rf",   // 危险删除
+	//	"sudo",     // sudo 命令
+	//	"su ",      // 切换用户
+	//	"chmod +x", // 修改执行权限
+	//}
+	//
+	//for _, pattern := range dangerousPatterns {
+	//	matched, _ := regexp.MatchString(pattern, command)
+	//	if matched {
+	//		reason := fmt.Sprintf("dangerous pattern detected: %s", pattern)
+	//		v.logDeniedCommand(ctx, reason, &ParsedCommand{})
+	//		return &ValidationResult{Valid: false, Reason: reason}
+	//	}
+	//}
+
+	return &ValidationResult{Valid: true}
 }
 
 // logDeniedCommand 记录被拒绝的命令
 func (v *validator) logDeniedCommand(ctx context.Context, reason string, cmd *ParsedCommand) {
 	if v.config.Security.Logging.LogDeniedCommands {
-		logit.Context(ctx).WarnW("command denied",
+		logit.Context(ctx).WarnW(
+			"logType", "command denied",
 			"reason", reason,
 			"interpreter", cmd.Interpreter,
 			"filePath", cmd.FilePath,
 			"args", cmd.Args,
 		)
 	}
+}
+
+// hasPipes 使用语法树检测命令中是否包含管道
+func (v *validator) hasPipes(command string) bool {
+	parser := syntax.NewParser()
+	prog, err := parser.Parse(strings.NewReader(command), "")
+	if err != nil {
+		// 解析失败时，为了安全起见返回 true（认为有管道）
+		return true
+	}
+
+	hasPipe := false
+	syntax.Walk(prog, func(node syntax.Node) bool {
+		// 检查 BinaryCmd 节点（管道的主要表示方式）
+		if binary, ok := node.(*syntax.BinaryCmd); ok {
+			if binary.Op == syntax.Pipe {
+				hasPipe = true
+				return false
+			}
+		}
+		return true
+	})
+
+	return hasPipe
+}
+
+// hasRedirection 使用语法树检测命令中是否包含重定向
+func (v *validator) hasRedirection(command string) bool {
+	parser := syntax.NewParser()
+	prog, err := parser.Parse(strings.NewReader(command), "")
+	if err != nil {
+		// 解析失败时，为了安全起见返回 true（认为有重定向）
+		return true
+	}
+
+	hasRedir := false
+	syntax.Walk(prog, func(node syntax.Node) bool {
+		if _, ok := node.(*syntax.Redirect); ok {
+			hasRedir = true
+			return false // 停止遍历
+		}
+		return true // 继续遍历
+	})
+
+	return hasRedir
 }

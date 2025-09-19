@@ -6,6 +6,7 @@ require (
 	github.com/bpcoder16/Chestnut/v2 v2.1.50-0.20250917063323-88e3c6b084bd
 	google.golang.org/grpc v1.75.0
 	google.golang.org/protobuf v1.36.8
+	mvdan.cc/sh/v3 v3.12.0
 )
 
 require (

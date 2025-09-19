@@ -19,7 +19,4 @@ type CommandValidator interface {
 
 	// IsEnabled 检查验证器是否启用
 	IsEnabled() bool
-
-	// Reload 重新加载配置
-	Reload() error
 }

@@ -1,7 +1,7 @@
 package security
 
-// SecurityConfig 安全配置结构
-type SecurityConfig struct {
+// Config 安全配置结构
+type Config struct {
 	Security struct {
 		EnableValidation bool `yaml:"enableValidation"`
 
