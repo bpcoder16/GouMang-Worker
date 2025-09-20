@@ -102,6 +102,154 @@ func (v *validator) ValidateCommand(ctx context.Context, command string) *Valida
 	}
 }
 
+// logDeniedCommand 记录被拒绝的命令
+func (v *validator) logDeniedCommand(ctx context.Context, reason string, cmd *ParsedCommand) {
+	if v.config.Security.Logging.LogDeniedCommands {
+		logit.Context(ctx).WarnW(
+			"logType", "command denied",
+			"reason", reason,
+			"interpreter", cmd.Interpreter,
+			"filePath", cmd.FilePath,
+			"args", cmd.Args,
+		)
+	}
+}
+
+// checkDangerousPatterns 检查危险模式
+func (v *validator) checkDangerousPatterns(ctx context.Context, command string) *ValidationResult {
+	// 统一解析命令语法树，避免重复解析
+	parser := syntax.NewParser()
+	prog, err := parser.Parse(strings.NewReader(command), "")
+	if err != nil {
+		// 解析失败时，为了安全起见认为是危险命令
+		reason := fmt.Sprintf("command parsing failed: %v", err)
+		v.logDeniedCommand(ctx, reason, &ParsedCommand{})
+		return &ValidationResult{Valid: false, Reason: reason}
+	}
+
+	// 检查管道 - 使用语法树精确检测
+	// TODO 需要考虑管道后的 grep 处理，需要增加 --line-buffered
+	if !v.config.Security.CommandParsing.AllowPipes {
+		if v.hasPipes(prog) {
+			reason := "pipes not allowed"
+			v.logDeniedCommand(ctx, reason, &ParsedCommand{})
+			return &ValidationResult{Valid: false, Reason: reason}
+		}
+	}
+
+	// 检查重定向 - 使用语法树精确检测
+	if !v.config.Security.CommandParsing.AllowRedirection {
+		if v.hasRedirection(prog) {
+			reason := "redirection not allowed"
+			v.logDeniedCommand(ctx, reason, &ParsedCommand{})
+			return &ValidationResult{Valid: false, Reason: reason}
+		}
+	}
+
+	// 检查后台执行 - 使用语法树精确检测
+	// TODO 考虑是否要禁掉 nohup 命令
+	if !v.config.Security.CommandParsing.AllowBackground {
+		if v.hasBackground(prog) {
+			reason := "background execution not allowed"
+			v.logDeniedCommand(ctx, reason, &ParsedCommand{})
+			return &ValidationResult{Valid: false, Reason: reason}
+		}
+	}
+
+	// 检查命令链接 - 使用语法树精确检测
+	if !v.config.Security.CommandParsing.AllowChaining {
+		if v.hasChaining(prog) {
+			reason := "command chaining not allowed"
+			v.logDeniedCommand(ctx, reason, &ParsedCommand{})
+			return &ValidationResult{Valid: false, Reason: reason}
+		}
+	}
+
+	//// 检查其他危险模式 - 使用语法树精确检测
+	//if result := v.checkOtherDangerousPatterns(ctx, prog); !result.Valid {
+	//	return result
+	//}
+
+	return &ValidationResult{Valid: true}
+}
+
+// hasPipes 从已解析的AST检测是否包含管道
+func (v *validator) hasPipes(prog *syntax.File) bool {
+	hasPipe := false
+	syntax.Walk(prog, func(node syntax.Node) bool {
+		// 检查 BinaryCmd 节点（管道的主要表示方式）
+		if binary, ok := node.(*syntax.BinaryCmd); ok {
+			if binary.Op == syntax.Pipe {
+				hasPipe = true
+				return false
+			}
+		}
+		return true
+	})
+
+	return hasPipe
+}
+
+// hasRedirection 从已解析的AST检测是否包含重定向
+func (v *validator) hasRedirection(prog *syntax.File) bool {
+	hasRedir := false
+	syntax.Walk(prog, func(node syntax.Node) bool {
+		if _, ok := node.(*syntax.Redirect); ok {
+			hasRedir = true
+			return false // 停止遍历
+		}
+		return true // 继续遍历
+	})
+
+	return hasRedir
+}
+
+// hasBackground 从已解析的AST检测是否包含后台执行
+func (v *validator) hasBackground(prog *syntax.File) bool {
+	hasBg := false
+	syntax.Walk(prog, func(node syntax.Node) bool {
+		// 检查语句节点的后台标志
+		if stmt, ok := node.(*syntax.Stmt); ok {
+			if stmt.Background {
+				hasBg = true
+				return false
+			}
+		}
+		return true
+	})
+
+	return hasBg
+}
+
+// hasChaining 从已解析的AST检测是否包含命令链接
+func (v *validator) hasChaining(prog *syntax.File) bool {
+	hasChain := false
+	syntax.Walk(prog, func(node syntax.Node) bool {
+		// 检查 BinaryCmd 节点（命令链接的主要表示方式）
+		if binary, ok := node.(*syntax.BinaryCmd); ok {
+			switch binary.Op {
+			case syntax.AndStmt, syntax.OrStmt: // && 和 ||
+				hasChain = true
+				return false
+			default:
+				// 其他类型的 BinaryCmd（如管道）不算命令链接
+			}
+		}
+		// 检查是否有多个语句（用 ; 分隔）
+		if file, ok := node.(*syntax.File); ok {
+			if len(file.Stmts) > 1 {
+				hasChain = true
+				return false
+			}
+		}
+		return true
+	})
+
+	return hasChain
+}
+
+///////////////////////////////////////////////////////////////////////////////////
+
 // ParsedCommand 解析后的命令结构
 type ParsedCommand struct {
 	Interpreter string   // 解释器 (python, php, bash 等)
@@ -312,152 +460,6 @@ func (v *validator) isPathAllowed(filePath string, allowedPath *AllowedPath) boo
 	}
 
 	return true
-}
-
-// checkDangerousPatterns 检查危险模式
-func (v *validator) checkDangerousPatterns(ctx context.Context, command string) *ValidationResult {
-	// 统一解析命令语法树，避免重复解析
-	parser := syntax.NewParser()
-	prog, err := parser.Parse(strings.NewReader(command), "")
-	if err != nil {
-		// 解析失败时，为了安全起见认为是危险命令
-		reason := fmt.Sprintf("command parsing failed: %v", err)
-		v.logDeniedCommand(ctx, reason, &ParsedCommand{})
-		return &ValidationResult{Valid: false, Reason: reason}
-	}
-
-	// 检查管道 - 使用语法树精确检测
-	// TODO 需要考虑管道后的 grep 处理，需要增加 --line-buffered
-	if !v.config.Security.CommandParsing.AllowPipes {
-		if v.hasPipes(prog) {
-			reason := "pipes not allowed"
-			v.logDeniedCommand(ctx, reason, &ParsedCommand{})
-			return &ValidationResult{Valid: false, Reason: reason}
-		}
-	}
-
-	// 检查重定向 - 使用语法树精确检测
-	if !v.config.Security.CommandParsing.AllowRedirection {
-		if v.hasRedirection(prog) {
-			reason := "redirection not allowed"
-			v.logDeniedCommand(ctx, reason, &ParsedCommand{})
-			return &ValidationResult{Valid: false, Reason: reason}
-		}
-	}
-
-	// 检查后台执行 - 使用语法树精确检测
-	// TODO 考虑是否要禁掉 nohup 命令
-	if !v.config.Security.CommandParsing.AllowBackground {
-		if v.hasBackground(prog) {
-			reason := "background execution not allowed"
-			v.logDeniedCommand(ctx, reason, &ParsedCommand{})
-			return &ValidationResult{Valid: false, Reason: reason}
-		}
-	}
-
-	// 检查命令链接 - 使用语法树精确检测
-	if !v.config.Security.CommandParsing.AllowChaining {
-		if v.hasChaining(prog) {
-			reason := "command chaining not allowed"
-			v.logDeniedCommand(ctx, reason, &ParsedCommand{})
-			return &ValidationResult{Valid: false, Reason: reason}
-		}
-	}
-
-	// 检查其他危险模式 - 使用语法树精确检测
-	if result := v.checkOtherDangerousPatterns(ctx, prog); !result.Valid {
-		return result
-	}
-
-	return &ValidationResult{Valid: true}
-}
-
-// logDeniedCommand 记录被拒绝的命令
-func (v *validator) logDeniedCommand(ctx context.Context, reason string, cmd *ParsedCommand) {
-	if v.config.Security.Logging.LogDeniedCommands {
-		logit.Context(ctx).WarnW(
-			"logType", "command denied",
-			"reason", reason,
-			"interpreter", cmd.Interpreter,
-			"filePath", cmd.FilePath,
-			"args", cmd.Args,
-		)
-	}
-}
-
-// hasPipes 从已解析的AST检测是否包含管道
-func (v *validator) hasPipes(prog *syntax.File) bool {
-	hasPipe := false
-	syntax.Walk(prog, func(node syntax.Node) bool {
-		// 检查 BinaryCmd 节点（管道的主要表示方式）
-		if binary, ok := node.(*syntax.BinaryCmd); ok {
-			if binary.Op == syntax.Pipe {
-				hasPipe = true
-				return false
-			}
-		}
-		return true
-	})
-
-	return hasPipe
-}
-
-// hasChaining 从已解析的AST检测是否包含命令链接
-func (v *validator) hasChaining(prog *syntax.File) bool {
-	hasChain := false
-	syntax.Walk(prog, func(node syntax.Node) bool {
-		// 检查 BinaryCmd 节点（命令链接的主要表示方式）
-		if binary, ok := node.(*syntax.BinaryCmd); ok {
-			switch binary.Op {
-			case syntax.AndStmt, syntax.OrStmt: // && 和 ||
-				hasChain = true
-				return false
-			default:
-				// 其他类型的 BinaryCmd（如管道）不算命令链接
-			}
-		}
-		// 检查是否有多个语句（用 ; 分隔）
-		if file, ok := node.(*syntax.File); ok {
-			if len(file.Stmts) > 1 {
-				hasChain = true
-				return false
-			}
-		}
-		return true
-	})
-
-	return hasChain
-}
-
-// hasBackground 从已解析的AST检测是否包含后台执行
-func (v *validator) hasBackground(prog *syntax.File) bool {
-	hasBg := false
-	syntax.Walk(prog, func(node syntax.Node) bool {
-		// 检查语句节点的后台标志
-		if stmt, ok := node.(*syntax.Stmt); ok {
-			if stmt.Background {
-				hasBg = true
-				return false
-			}
-		}
-		return true
-	})
-
-	return hasBg
-}
-
-// hasRedirection 从已解析的AST检测是否包含重定向
-func (v *validator) hasRedirection(prog *syntax.File) bool {
-	hasRedir := false
-	syntax.Walk(prog, func(node syntax.Node) bool {
-		if _, ok := node.(*syntax.Redirect); ok {
-			hasRedir = true
-			return false // 停止遍历
-		}
-		return true // 继续遍历
-	})
-
-	return hasRedir
 }
 
 // checkOtherDangerousPatterns 从已解析的AST检查其他危险模式

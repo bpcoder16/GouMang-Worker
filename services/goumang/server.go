@@ -10,7 +10,6 @@ import (
 	// 导入执行器包以触发自动注册
 	_ "goumang-worker/services/executor/shell"
 
-	"github.com/bpcoder16/Chestnut/v2/logit"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -52,7 +51,6 @@ func (s *Server) Run(req *pb.TaskRequest, stream pb.Task_RunServer) error {
 		err = exec.Execute(ctx, req.MethodParams, stream)
 	}
 
-	logit.Context(ctx).InfoW("task", "completed", "method", req.Method.String(), "taskId", req.RunTaskId, "error", err)
 	return err
 }
 
