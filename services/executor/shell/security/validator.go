@@ -127,8 +127,14 @@ func (v *validator) checkDangerousPatterns(ctx context.Context, command string) 
 		return &ValidationResult{Valid: false, Reason: reason}
 	}
 
-	// 检查命令替换语法（$() 和反引号） - 最高优先级安全检查
+	// 检查命令替换语法（$() 和反引号） - 强制禁止
 	if result := v.checkCommandSubstitution(ctx, prog); !result.Valid {
+		return result
+	}
+
+	// 检查后台执行（& 符号） - 强制禁止
+	// TODO 考虑是否要禁掉 nohup 命令
+	if result := v.checkBackgroundExecution(ctx, prog); !result.Valid {
 		return result
 	}
 
@@ -146,16 +152,6 @@ func (v *validator) checkDangerousPatterns(ctx context.Context, command string) 
 	if !v.config.Security.CommandParsing.AllowRedirection {
 		if v.hasRedirection(prog) {
 			reason := "redirection not allowed"
-			v.logDeniedCommand(ctx, reason, &ParsedCommand{})
-			return &ValidationResult{Valid: false, Reason: reason}
-		}
-	}
-
-	// 检查后台执行 - 使用语法树精确检测
-	// TODO 考虑是否要禁掉 nohup 命令
-	if !v.config.Security.CommandParsing.AllowBackground {
-		if v.hasBackground(prog) {
-			reason := "background execution not allowed"
 			v.logDeniedCommand(ctx, reason, &ParsedCommand{})
 			return &ValidationResult{Valid: false, Reason: reason}
 		}
@@ -269,6 +265,19 @@ func (v *validator) checkCommandSubstitution(ctx context.Context, prog *syntax.F
 
 	if hasCmdSubst {
 		reason := fmt.Sprintf("command substitution not allowed: %s", cmdSubstType)
+		v.logDeniedCommand(ctx, reason, &ParsedCommand{})
+		return &ValidationResult{Valid: false, Reason: reason}
+	}
+
+	return &ValidationResult{Valid: true}
+}
+
+// checkBackgroundExecution 检查后台执行（& 符号）
+func (v *validator) checkBackgroundExecution(ctx context.Context, prog *syntax.File) *ValidationResult {
+	hasBackground := v.hasBackground(prog)
+
+	if hasBackground {
+		reason := "background execution not allowed"
 		v.logDeniedCommand(ctx, reason, &ParsedCommand{})
 		return &ValidationResult{Valid: false, Reason: reason}
 	}

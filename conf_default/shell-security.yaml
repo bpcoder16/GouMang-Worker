@@ -61,11 +61,8 @@ security:
     allowPipes: false
     # 是否允许重定向
     allowRedirection: false
-    # 是否允许后台执行 (谨慎开启)
-    allowBackground: false
     # 是否允许命令链接 (&&, ||, ;)
     allowChaining: false
-
 
   # 日志配置
   logging:

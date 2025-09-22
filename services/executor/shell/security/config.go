@@ -35,7 +35,6 @@ type AllowedInterpreter struct {
 type CommandParsingConfig struct {
 	AllowPipes       bool `yaml:"allowPipes"`
 	AllowRedirection bool `yaml:"allowRedirection"`
-	AllowBackground  bool `yaml:"allowBackground"`
 	AllowChaining    bool `yaml:"allowChaining"`
 }
 
