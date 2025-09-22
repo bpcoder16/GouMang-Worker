@@ -127,6 +127,11 @@ func (v *validator) checkDangerousPatterns(ctx context.Context, command string) 
 		return &ValidationResult{Valid: false, Reason: reason}
 	}
 
+	// 检查命令替换语法（$() 和反引号） - 最高优先级安全检查
+	if result := v.checkCommandSubstitution(ctx, prog); !result.Valid {
+		return result
+	}
+
 	// 检查管道 - 使用语法树精确检测
 	// TODO 需要考虑管道后的 grep 处理，需要增加 --line-buffered
 	if !v.config.Security.CommandParsing.AllowPipes {
@@ -163,11 +168,6 @@ func (v *validator) checkDangerousPatterns(ctx context.Context, command string) 
 			v.logDeniedCommand(ctx, reason, &ParsedCommand{})
 			return &ValidationResult{Valid: false, Reason: reason}
 		}
-	}
-
-	// 检查其他危险模式 - 使用语法树精确检测
-	if result := v.checkOtherDangerousPatterns(ctx, prog); !result.Valid {
-		return result
 	}
 
 	return &ValidationResult{Valid: true}
@@ -248,21 +248,6 @@ func (v *validator) hasChaining(prog *syntax.File) bool {
 	return hasChain
 }
 
-// checkOtherDangerousPatterns 从已解析的AST检查其他危险模式
-func (v *validator) checkOtherDangerousPatterns(ctx context.Context, prog *syntax.File) *ValidationResult {
-	// 检查命令替换，并禁用
-	if result := v.checkCommandSubstitution(ctx, prog); !result.Valid {
-		return result
-	}
-
-	// 检查危险命令名称和参数
-	if result := v.checkDangerousCommands(ctx, prog); !result.Valid {
-		return result
-	}
-
-	return &ValidationResult{Valid: true}
-}
-
 // checkCommandSubstitution 检查命令替换（$() 和反引号）
 func (v *validator) checkCommandSubstitution(ctx context.Context, prog *syntax.File) *ValidationResult {
 	hasCmdSubst := false
@@ -289,143 +274,6 @@ func (v *validator) checkCommandSubstitution(ctx context.Context, prog *syntax.F
 	}
 
 	return &ValidationResult{Valid: true}
-}
-
-// checkDangerousCommands 检查危险命令名称和参数组合
-func (v *validator) checkDangerousCommands(ctx context.Context, prog *syntax.File) *ValidationResult {
-	// 从配置文件读取危险命令列表
-	dangerousCommands := v.config.Security.DangerousCommands
-
-	// 如果配置为空，使用默认的危险命令列表
-	if len(dangerousCommands) == 0 {
-		return &ValidationResult{Valid: true}
-	}
-
-	var foundIssue *ValidationResult
-
-	syntax.Walk(prog, func(node syntax.Node) bool {
-		// 检查命令调用节点
-		if callExpr, ok := node.(*syntax.CallExpr); ok {
-			if len(callExpr.Args) == 0 {
-				return true
-			}
-
-			// 检查命令是否包含变量展开或其他复杂语法
-			if v.containsComplexSyntax(callExpr.Args[0]) {
-				reason := "commands with variable expansion or complex syntax are not allowed"
-				v.logDeniedCommand(ctx, reason, &ParsedCommand{Interpreter: "complex_syntax"})
-				foundIssue = &ValidationResult{Valid: false, Reason: reason}
-				return false
-			}
-
-			// 获取命令名称
-			cmdName := v.getCommandName(callExpr.Args[0])
-			if cmdName == "" {
-				return true
-			}
-
-			// 检查是否是危险命令
-			if dangerousArgs, isDangerous := dangerousCommands[cmdName]; isDangerous {
-				// 如果是绝对禁止的命令（空参数列表表示完全禁止）
-				if len(dangerousArgs) == 0 {
-					reason := fmt.Sprintf("dangerous command not allowed: %s", cmdName)
-					v.logDeniedCommand(ctx, reason, &ParsedCommand{Interpreter: cmdName})
-					foundIssue = &ValidationResult{Valid: false, Reason: reason}
-					return false
-				}
-
-				// 检查危险参数组合
-				if v.hasDangerousArgs(callExpr.Args[1:], dangerousArgs) {
-					reason := fmt.Sprintf("dangerous command with forbidden arguments: %s", cmdName)
-					v.logDeniedCommand(ctx, reason, &ParsedCommand{Interpreter: cmdName})
-					foundIssue = &ValidationResult{Valid: false, Reason: reason}
-					return false
-				}
-			}
-		}
-		return true
-	})
-
-	if foundIssue != nil {
-		return foundIssue
-	}
-
-	return &ValidationResult{Valid: true}
-}
-
-// containsComplexSyntax 检查命令是否包含变量展开、命令替换等复杂语法
-func (v *validator) containsComplexSyntax(arg *syntax.Word) bool {
-	if arg == nil || len(arg.Parts) == 0 {
-		return false
-	}
-
-	// 检查是否包含非字面量部分
-	for _, part := range arg.Parts {
-		if _, ok := part.(*syntax.Lit); !ok {
-			return true // 包含变量展开、命令替换等复杂语法
-		}
-	}
-	return false
-}
-
-// getCommandName 从语法节点中提取命令名称
-func (v *validator) getCommandName(arg *syntax.Word) string {
-	if arg == nil || len(arg.Parts) == 0 {
-		return ""
-	}
-
-	// 拼接所有字面量部分
-	var cmdPath strings.Builder
-	for _, part := range arg.Parts {
-		if lit, ok := part.(*syntax.Lit); ok {
-			cmdPath.WriteString(lit.Value)
-		}
-	}
-
-	fullPath := cmdPath.String()
-	// 如果是绝对路径或相对路径，提取命令名称（basename）
-	if strings.Contains(fullPath, "/") {
-		return filepath.Base(fullPath)
-	}
-	return fullPath
-}
-
-// hasDangerousArgs 检查是否包含危险参数
-func (v *validator) hasDangerousArgs(args []*syntax.Word, dangerousArgs []string) bool {
-	// 将所有参数转换为字符串
-	var argStrings []string
-	for _, arg := range args {
-		if argStr := v.wordToString(arg); argStr != "" {
-			argStrings = append(argStrings, argStr)
-		}
-	}
-
-	// 检查是否包含危险参数
-	for _, dangerousArg := range dangerousArgs {
-		for _, argStr := range argStrings {
-			if strings.Contains(argStr, dangerousArg) {
-				return true
-			}
-		}
-	}
-
-	return false
-}
-
-// wordToString 将 Word 节点转换为字符串
-func (v *validator) wordToString(word *syntax.Word) string {
-	if word == nil {
-		return ""
-	}
-
-	var result strings.Builder
-	for _, part := range word.Parts {
-		if lit, ok := part.(*syntax.Lit); ok {
-			result.WriteString(lit.Value)
-		}
-	}
-
-	return result.String()
 }
 
 ///////////////////////////////////////////////////////////////////////////////////
