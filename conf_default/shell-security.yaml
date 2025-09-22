@@ -23,38 +23,6 @@ security:
       recursive: false  # 只允许当前目录
       maxDepth: 0
 
-  # 允许的命令类型和解释器
-  allowedInterpreters:
-    # Python 解释器
-    - name: "python"
-      executables: ["python", "python3", "python3.8", "python3.9", "python3.10", "python3.11"]
-      fileExtensions: [".py", ".pyw"]
-      description: "Python 脚本执行器"
-
-    # PHP 解释器
-    - name: "php"
-      executables: ["php", "php8", "php7"]
-      fileExtensions: [".php"]
-      description: "PHP 脚本执行器"
-
-    # Shell 解释器
-    - name: "shell"
-      executables: ["bash", "sh", "zsh"]
-      fileExtensions: [".sh", ".bash", ".zsh"]
-      description: "Shell 脚本执行器"
-
-    # Node.js 解释器
-    - name: "node"
-      executables: ["node"]
-      fileExtensions: [".js"]
-      description: "Node.js 脚本执行器"
-
-    # 二进制可执行文件
-    - name: "binary"
-      executables: []  # 空表示直接执行
-      fileExtensions: [""]  # 无扩展名
-      description: "二进制可执行文件"
-
   # 命令解析配置
   commandParsing:
     # 是否允许管道操作

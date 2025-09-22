@@ -7,8 +7,6 @@ type Config struct {
 
 		AllowedPaths []AllowedPath `yaml:"allowedPaths"`
 
-		AllowedInterpreters []AllowedInterpreter `yaml:"allowedInterpreters"`
-
 		CommandParsing CommandParsingConfig `yaml:"commandParsing"`
 
 		Logging LoggingConfig `yaml:"logging"`
@@ -21,14 +19,6 @@ type AllowedPath struct {
 	Description string `yaml:"description"`
 	Recursive   bool   `yaml:"recursive"`
 	MaxDepth    int    `yaml:"maxDepth"`
-}
-
-// AllowedInterpreter 允许的解释器配置
-type AllowedInterpreter struct {
-	Name           string   `yaml:"name"`
-	Executables    []string `yaml:"executables"`
-	FileExtensions []string `yaml:"fileExtensions"`
-	Description    string   `yaml:"description"`
 }
 
 // CommandParsingConfig 命令解析配置
