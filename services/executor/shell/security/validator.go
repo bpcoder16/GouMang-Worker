@@ -3,8 +3,6 @@ package security
 import (
 	"context"
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 
@@ -72,61 +70,42 @@ func (v *validator) ValidateCommand(ctx context.Context, command string) *Valida
 		}
 	}
 
-	// 检查危险模式
-	if result := v.checkDangerousPatterns(ctx, command); !result.Valid {
-		return result
-	}
-
-	//// 解析命令
-	//parsedCmd, err := v.parseCommand(command)
-	//if err != nil {
-	//	return &ValidationResult{
-	//		Valid:  false,
-	//		Reason: fmt.Sprintf("failed to parse command: %v", err),
-	//	}
-	//}
-	//
-	//// 验证命令
-	//if result := v.validateParsedCommand(ctx, parsedCmd); !result.Valid {
-	//	return result
-	//}
-	//
-	//// 记录允许的命令
-	//if v.config.Security.Logging.LogAllowedCommands {
-	//	logit.Context(ctx).InfoW("command allowed", "command", command)
-	//}
-
-	return &ValidationResult{
-		Valid:             true,
-		NormalizedCommand: command,
-	}
-}
-
-// logDeniedCommand 记录被拒绝的命令
-func (v *validator) logDeniedCommand(ctx context.Context, reason string, cmd *ParsedCommand) {
-	if v.config.Security.Logging.LogDeniedCommands {
-		logit.Context(ctx).WarnW(
-			"logType", "command denied",
-			"reason", reason,
-			"interpreter", cmd.Interpreter,
-			"filePath", cmd.FilePath,
-			"args", cmd.Args,
-		)
-	}
-}
-
-// checkDangerousPatterns 检查危险模式
-func (v *validator) checkDangerousPatterns(ctx context.Context, command string) *ValidationResult {
-	// 统一解析命令语法树，避免重复解析
+	// 一次性解析命令语法树
 	parser := syntax.NewParser()
 	prog, err := parser.Parse(strings.NewReader(command), "")
 	if err != nil {
 		// 解析失败时，为了安全起见认为是危险命令
 		reason := fmt.Sprintf("command parsing failed: %v", err)
-		v.logDeniedCommand(ctx, reason, &ParsedCommand{})
+		v.logDeniedCommand(ctx, reason)
 		return &ValidationResult{Valid: false, Reason: reason}
 	}
 
+	// 使用已解析的AST进行危险模式检查
+	if result := v.checkDangerousPatternsWithAST(ctx, prog); !result.Valid {
+		return result
+	}
+
+	// 兜底验证：默认拒绝所有未明确允许的命令
+	reason := "command not in whitelist - default deny policy"
+	v.logDeniedCommand(ctx, reason)
+	return &ValidationResult{
+		Valid:  false,
+		Reason: reason,
+	}
+}
+
+// logDeniedCommand 记录被拒绝的命令
+func (v *validator) logDeniedCommand(ctx context.Context, reason string) {
+	if v.config.Security.Logging.LogDeniedCommands {
+		logit.Context(ctx).WarnW(
+			"logType", "command denied",
+			"reason", reason,
+		)
+	}
+}
+
+// checkDangerousPatternsWithAST 使用已解析的AST检查危险模式
+func (v *validator) checkDangerousPatternsWithAST(ctx context.Context, prog *syntax.File) *ValidationResult {
 	// 检查命令替换语法（$() 和反引号） - 强制禁止
 	if result := v.checkCommandSubstitution(ctx, prog); !result.Valid {
 		return result
@@ -143,7 +122,7 @@ func (v *validator) checkDangerousPatterns(ctx context.Context, command string) 
 	if !v.config.Security.CommandParsing.AllowPipes {
 		if v.hasPipes(prog) {
 			reason := "pipes not allowed"
-			v.logDeniedCommand(ctx, reason, &ParsedCommand{})
+			v.logDeniedCommand(ctx, reason)
 			return &ValidationResult{Valid: false, Reason: reason}
 		}
 	}
@@ -152,7 +131,7 @@ func (v *validator) checkDangerousPatterns(ctx context.Context, command string) 
 	if !v.config.Security.CommandParsing.AllowRedirection {
 		if v.hasRedirection(prog) {
 			reason := "redirection not allowed"
-			v.logDeniedCommand(ctx, reason, &ParsedCommand{})
+			v.logDeniedCommand(ctx, reason)
 			return &ValidationResult{Valid: false, Reason: reason}
 		}
 	}
@@ -161,7 +140,7 @@ func (v *validator) checkDangerousPatterns(ctx context.Context, command string) 
 	if !v.config.Security.CommandParsing.AllowChaining {
 		if v.hasChaining(prog) {
 			reason := "command chaining not allowed"
-			v.logDeniedCommand(ctx, reason, &ParsedCommand{})
+			v.logDeniedCommand(ctx, reason)
 			return &ValidationResult{Valid: false, Reason: reason}
 		}
 	}
@@ -265,7 +244,7 @@ func (v *validator) checkCommandSubstitution(ctx context.Context, prog *syntax.F
 
 	if hasCmdSubst {
 		reason := fmt.Sprintf("command substitution not allowed: %s", cmdSubstType)
-		v.logDeniedCommand(ctx, reason, &ParsedCommand{})
+		v.logDeniedCommand(ctx, reason)
 		return &ValidationResult{Valid: false, Reason: reason}
 	}
 
@@ -278,223 +257,9 @@ func (v *validator) checkBackgroundExecution(ctx context.Context, prog *syntax.F
 
 	if hasBackground {
 		reason := "background execution not allowed"
-		v.logDeniedCommand(ctx, reason, &ParsedCommand{})
+		v.logDeniedCommand(ctx, reason)
 		return &ValidationResult{Valid: false, Reason: reason}
 	}
 
 	return &ValidationResult{Valid: true}
-}
-
-///////////////////////////////////////////////////////////////////////////////////
-
-// ParsedCommand 解析后的命令结构
-type ParsedCommand struct {
-	Interpreter string   // 解释器 (python, php, bash 等)
-	Args        []string // 参数列表
-	FilePath    string   // 目标文件路径
-}
-
-// parseCommand 解析命令
-func (v *validator) parseCommand(command string) (*ParsedCommand, error) {
-	parts := strings.Fields(command)
-	if len(parts) == 0 {
-		return nil, fmt.Errorf("empty command")
-	}
-
-	cmd := &ParsedCommand{
-		Interpreter: parts[0],
-		Args:        parts[1:],
-	}
-
-	// 查找文件路径
-	for _, arg := range cmd.Args {
-		// 跳过选项参数
-		if strings.HasPrefix(arg, "-") {
-			continue
-		}
-		// 找到第一个非选项参数作为文件路径
-		cmd.FilePath = arg
-		break
-	}
-
-	return cmd, nil
-}
-
-// validateParsedCommand 验证解析后的命令
-func (v *validator) validateParsedCommand(ctx context.Context, cmd *ParsedCommand) *ValidationResult {
-	// 验证解释器
-	interpreter := v.findMatchingInterpreter(cmd.Interpreter)
-	if interpreter == nil {
-		reason := fmt.Sprintf("interpreter '%s' not allowed", cmd.Interpreter)
-		v.logDeniedCommand(ctx, reason, cmd)
-		return &ValidationResult{
-			Valid:  false,
-			Reason: reason,
-		}
-	}
-
-	// 如果没有文件路径，只允许特定解释器的内置命令
-	if cmd.FilePath == "" {
-		// 对于二进制执行器，解释器本身就是要执行的命令
-		if interpreter.Name == "binary" {
-			return v.validateBinaryExecutable(ctx, cmd.Interpreter)
-		}
-		// 其他解释器需要指定文件
-		reason := "missing file path"
-		v.logDeniedCommand(ctx, reason, cmd)
-		return &ValidationResult{
-			Valid:  false,
-			Reason: reason,
-		}
-	}
-
-	// 验证文件路径
-	return v.validateFilePath(ctx, cmd.FilePath, interpreter)
-}
-
-// findMatchingInterpreter 查找匹配的解释器配置
-func (v *validator) findMatchingInterpreter(executable string) *AllowedInterpreter {
-	for _, interpreter := range v.config.Security.AllowedInterpreters {
-		// 检查可执行文件名
-		for _, exec := range interpreter.Executables {
-			if exec == executable {
-				return &interpreter
-			}
-		}
-		// 对于二进制文件，直接匹配名称
-		if interpreter.Name == "binary" && len(interpreter.Executables) == 0 {
-			return &interpreter
-		}
-	}
-	return nil
-}
-
-// validateBinaryExecutable 验证二进制可执行文件
-func (v *validator) validateBinaryExecutable(ctx context.Context, executable string) *ValidationResult {
-	// 验证可执行文件路径是否在允许的目录中
-	for _, allowedPath := range v.config.Security.AllowedPaths {
-		fullPath := filepath.Join(allowedPath.Path, executable)
-		if v.isPathAllowed(fullPath, &allowedPath) {
-			return &ValidationResult{Valid: true}
-		}
-	}
-
-	reason := fmt.Sprintf("binary executable '%s' not in allowed paths", executable)
-	v.logDeniedCommand(ctx, reason, &ParsedCommand{Interpreter: executable})
-	return &ValidationResult{
-		Valid:  false,
-		Reason: reason,
-	}
-}
-
-// validateFilePath 验证文件路径
-func (v *validator) validateFilePath(ctx context.Context, filePath string, interpreter *AllowedInterpreter) *ValidationResult {
-	// 转换为绝对路径
-	absPath, err := filepath.Abs(filePath)
-	if err != nil {
-		reason := fmt.Sprintf("invalid file path '%s': %v", filePath, err)
-		v.logDeniedCommand(ctx, reason, &ParsedCommand{FilePath: filePath})
-		return &ValidationResult{
-			Valid:  false,
-			Reason: reason,
-		}
-	}
-
-	// 检查文件是否存在
-	if _, err := os.Stat(absPath); os.IsNotExist(err) {
-		reason := fmt.Sprintf("file does not exist: %s", absPath)
-		v.logDeniedCommand(ctx, reason, &ParsedCommand{FilePath: filePath})
-		return &ValidationResult{
-			Valid:  false,
-			Reason: reason,
-		}
-	}
-
-	// 检查文件扩展名
-	if !v.isValidFileExtension(absPath, interpreter) {
-		reason := fmt.Sprintf("file extension not allowed for interpreter '%s': %s", interpreter.Name, absPath)
-		v.logDeniedCommand(ctx, reason, &ParsedCommand{FilePath: filePath})
-		return &ValidationResult{
-			Valid:  false,
-			Reason: reason,
-		}
-	}
-
-	// 检查路径是否在白名单中
-	if !v.isFileInAllowedPaths(absPath) {
-		reason := fmt.Sprintf("file path not in allowed directories: %s", absPath)
-		v.logDeniedCommand(ctx, reason, &ParsedCommand{FilePath: filePath})
-		return &ValidationResult{
-			Valid:  false,
-			Reason: reason,
-		}
-	}
-
-	return &ValidationResult{Valid: true}
-}
-
-// isValidFileExtension 检查文件扩展名是否有效
-func (v *validator) isValidFileExtension(filePath string, interpreter *AllowedInterpreter) bool {
-	ext := strings.ToLower(filepath.Ext(filePath))
-
-	// 对于没有扩展名的二进制文件
-	if interpreter.Name == "binary" && ext == "" {
-		return true
-	}
-
-	for _, allowedExt := range interpreter.FileExtensions {
-		if ext == allowedExt {
-			return true
-		}
-	}
-	return false
-}
-
-// isFileInAllowedPaths 检查文件是否在允许的路径中
-func (v *validator) isFileInAllowedPaths(filePath string) bool {
-	for _, allowedPath := range v.config.Security.AllowedPaths {
-		if v.isPathAllowed(filePath, &allowedPath) {
-			return true
-		}
-	}
-	return false
-}
-
-// isPathAllowed 检查路径是否被允许
-func (v *validator) isPathAllowed(filePath string, allowedPath *AllowedPath) bool {
-	absAllowedPath, err := filepath.Abs(allowedPath.Path)
-	if err != nil {
-		return false
-	}
-
-	absFilePath, err := filepath.Abs(filePath)
-	if err != nil {
-		return false
-	}
-
-	// 检查是否在允许的路径下
-	relPath, err := filepath.Rel(absAllowedPath, absFilePath)
-	if err != nil {
-		return false
-	}
-
-	// 检查是否试图访问父目录
-	if strings.HasPrefix(relPath, "..") {
-		return false
-	}
-
-	// 如果不允许递归，文件必须在当前目录
-	if !allowedPath.Recursive {
-		return filepath.Dir(absFilePath) == absAllowedPath
-	}
-
-	// 检查递归深度
-	if allowedPath.MaxDepth >= 0 {
-		depth := len(strings.Split(relPath, string(filepath.Separator))) - 1
-		if depth > allowedPath.MaxDepth {
-			return false
-		}
-	}
-
-	return true
 }
