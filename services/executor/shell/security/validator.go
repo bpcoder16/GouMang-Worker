@@ -293,17 +293,12 @@ func (v *validator) checkCommandSubstitution(ctx context.Context, prog *syntax.F
 
 // checkDangerousCommands 检查危险命令名称和参数组合
 func (v *validator) checkDangerousCommands(ctx context.Context, prog *syntax.File) *ValidationResult {
-	// 定义危险命令列表
-	dangerousCommands := map[string][]string{
-		"sudo": {}, // 任何 sudo 都不允许
-		"su":   {}, // 任何 su 都不允许
-		//"rm":     {"-rf", "-r", "-f"},  // rm 配合这些参数不允许
-		"rm":     {},                   // 任何 rm 都不允许
-		"chmod":  {"+x", "777", "755"}, // chmod 配合这些参数需要检查
-		"chown":  {},                   // 任何 chown 都不允许
-		"mount":  {},                   // 任何 mount 都不允许
-		"umount": {},                   // 任何 umount 都不允许
-		"dd":     {},                   // 任何 dd 都不允许
+	// 从配置文件读取危险命令列表
+	dangerousCommands := v.config.Security.DangerousCommands
+
+	// 如果配置为空，使用默认的危险命令列表
+	if len(dangerousCommands) == 0 {
+		return &ValidationResult{Valid: true}
 	}
 
 	var foundIssue *ValidationResult

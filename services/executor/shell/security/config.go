@@ -11,6 +11,8 @@ type Config struct {
 
 		CommandParsing CommandParsingConfig `yaml:"commandParsing"`
 
+		DangerousCommands map[string][]string `yaml:"dangerousCommands"`
+
 		Logging LoggingConfig `yaml:"logging"`
 	} `yaml:"security"`
 }
