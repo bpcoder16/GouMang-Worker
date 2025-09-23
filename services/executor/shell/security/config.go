@@ -5,20 +5,10 @@ type Config struct {
 	Security struct {
 		EnableValidation bool `yaml:"enableValidation"`
 
-		AllowedPaths []AllowedPath `yaml:"allowedPaths"`
-
 		CommandParsing CommandParsingConfig `yaml:"commandParsing"`
 
 		Logging LoggingConfig `yaml:"logging"`
 	} `yaml:"security"`
-}
-
-// AllowedPath 允许的路径配置
-type AllowedPath struct {
-	Path        string `yaml:"path"`
-	Description string `yaml:"description"`
-	Recursive   bool   `yaml:"recursive"`
-	MaxDepth    int    `yaml:"maxDepth"`
 }
 
 // CommandParsingConfig 命令解析配置

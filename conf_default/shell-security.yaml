@@ -3,26 +3,6 @@ security:
   # 启用命令验证（开发环境可设为 false）
   enableValidation: true
 
-  # 允许的执行路径白名单
-  allowedPaths:
-    # 示例：应用脚本目录
-    - path: "/opt/app/scripts"
-      description: "应用脚本目录"
-      recursive: true  # 允许子目录
-      maxDepth: 10     # 最大子目录深度，0表示只当前目录，-1表示无限制
-
-    # 示例：用户脚本目录
-    - path: "/home/scripts"
-      description: "用户脚本目录"
-      recursive: true
-      maxDepth: 3
-
-    # 示例：系统工具目录
-    - path: "/usr/local/bin"
-      description: "系统工具目录"
-      recursive: false  # 只允许当前目录
-      maxDepth: 0
-
   # 命令解析配置
   commandParsing:
     # 是否允许管道操作
