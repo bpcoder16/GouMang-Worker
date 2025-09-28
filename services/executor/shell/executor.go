@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"goumang-worker/services/executor"
+	"goumang-worker/services/executor/shell/config"
 	"goumang-worker/services/executor/shell/security"
 	"goumang-worker/services/pb"
 	"io"
@@ -28,11 +29,22 @@ const (
 )
 
 // Executor shell 命令执行器
-type Executor struct {}
+type Executor struct{}
 
 // NewExecutor 创建新的 shell 执行器
 func NewExecutor() executor.Executor {
 	return &Executor{}
+}
+
+// getShellCommand 根据配置获取 shell 命令和参数
+func (e *Executor) getShellCommand(command string) (string, []string) {
+	shellConfig := config.GetShellConfig()
+
+	// 构建完整的参数列表：配置参数 + 命令内容
+	args := make([]string, len(shellConfig.Args))
+	copy(args, shellConfig.Args)
+
+	return shellConfig.Command, append(args, command)
 }
 
 // Execute 执行 shell 命令
@@ -54,7 +66,9 @@ func (e *Executor) Execute(ctx context.Context, command string, stream pb.Task_R
 		}
 	}
 
-	cmd := exec.CommandContext(ctx, "/bin/bash", "-c", command)
+	// 获取配置化的 shell 命令和参数
+	shellCmd, shellArgs := e.getShellCommand(command)
+	cmd := exec.CommandContext(ctx, shellCmd, shellArgs...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{
 		Setpgid: true, // 独立进程组，便于杀掉整个子进程组
 	}
@@ -201,4 +215,3 @@ func (e *Executor) killProcessGroup(ctx context.Context, cmd *exec.Cmd) error {
 	logit.Context(ctx).InfoW("process group killed pid", cmd.Process.Pid)
 	return nil
 }
-

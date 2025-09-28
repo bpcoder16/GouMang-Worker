@@ -3,50 +3,28 @@ package security
 import (
 	"context"
 	"fmt"
+	"goumang-worker/services/executor/shell/config"
 	"strings"
 	"sync"
 
-	"github.com/bpcoder16/Chestnut/v2/core/utils"
 	"github.com/bpcoder16/Chestnut/v2/logit"
 	"mvdan.cc/sh/v3/syntax"
 )
 
 // validator 命令验证器实现
 type validator struct {
-	config *Config
-	mu     sync.RWMutex
+	mu sync.RWMutex
 }
 
 // NewValidator 创建新的命令验证器
-func NewValidator(configPath string) (CommandValidator, error) {
-	v := &validator{}
-	if err := v.loadConfig(configPath); err != nil {
-		return nil, fmt.Errorf("failed to load security config: %w", err)
-	}
-	return v, nil
+func NewValidator() CommandValidator {
+	return &validator{}
 }
 
 // IsEnabled 检查验证器是否启用
 func (v *validator) IsEnabled() bool {
-	v.mu.RLock()
-	defer v.mu.RUnlock()
-	return v.config != nil && v.config.Security.EnableValidation
-}
-
-// loadConfig 加载配置文件
-func (v *validator) loadConfig(configPath string) error {
-	config := &Config{}
-
-	// 使用 Chestnut 框架的 utils.ParseFile 方式
-	if err := utils.ParseFile(configPath, config); err != nil {
-		return fmt.Errorf("failed to load config from %s: %w", configPath, err)
-	}
-
-	v.mu.Lock()
-	v.config = config
-	v.mu.Unlock()
-
-	return nil
+	securityConfig := config.GetSecurityConfig()
+	return securityConfig.EnableValidation
 }
 
 // ValidateCommand 验证命令是否允许执行
@@ -97,7 +75,8 @@ func (v *validator) ValidateCommand(ctx context.Context, command string) *Valida
 
 // logDeniedCommand 记录被拒绝的命令
 func (v *validator) logDeniedCommand(ctx context.Context, reason string) {
-	if v.config.Security.Logging.LogDeniedCommands {
+	securityConfig := config.GetSecurityConfig()
+	if securityConfig.Logging.LogDeniedCommands {
 		logit.Context(ctx).WarnW(
 			"logType", "command denied",
 			"reason", reason,
@@ -118,9 +97,11 @@ func (v *validator) checkDangerousPatternsWithAST(ctx context.Context, prog *syn
 		return result
 	}
 
+	securityConfig := config.GetSecurityConfig()
+
 	// 检查管道 - 使用语法树精确检测
 	// TODO 需要考虑管道后的 grep 处理，需要增加 --line-buffered
-	if !v.config.Security.CommandParsing.AllowPipes {
+	if !securityConfig.CommandParsing.AllowPipes {
 		if v.hasPipes(prog) {
 			reason := "pipes not allowed"
 			v.logDeniedCommand(ctx, reason)
@@ -129,7 +110,7 @@ func (v *validator) checkDangerousPatternsWithAST(ctx context.Context, prog *syn
 	}
 
 	// 检查重定向 - 使用语法树精确检测
-	if !v.config.Security.CommandParsing.AllowRedirection {
+	if !securityConfig.CommandParsing.AllowRedirection {
 		if v.hasRedirection(prog) {
 			reason := "redirection not allowed"
 			v.logDeniedCommand(ctx, reason)
@@ -138,7 +119,7 @@ func (v *validator) checkDangerousPatternsWithAST(ctx context.Context, prog *syn
 	}
 
 	// 检查命令链接 - 使用语法树精确检测
-	if !v.config.Security.CommandParsing.AllowChaining {
+	if !securityConfig.CommandParsing.AllowChaining {
 		if v.hasChaining(prog) {
 			reason := "command chaining not allowed"
 			v.logDeniedCommand(ctx, reason)

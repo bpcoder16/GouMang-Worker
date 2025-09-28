@@ -1,4 +1,11 @@
-# 默认安全配置文件
+# Shell 执行器配置文件
+shell:
+  # Shell 命令路径
+  command: "/bin/bash"
+  # Shell 参数（命令内容会追加到这些参数后面）
+  args: ["-c"]
+
+# 安全配置
 security:
   # 启用命令验证（开发环境可设为 false）
   enableValidation: true
